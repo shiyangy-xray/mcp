@@ -270,9 +270,11 @@ async def audit_service_health(
     - **Wildcard Pattern Support**: Use `*pattern*` in service names for automatic service discovery
 
     **AUDIT TARGET TYPES:**
-    - **Service Audit**: `[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"my-service","Environment":"prod"}}}]`
+    - **Service Audit**: `[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"my-service","Environment":"ecs:my-cluster"}}}]`
     - **SLO Audit**: `[{"Type":"slo","Data":{"SloName":"my-slo"}}]`
-    - **Operation Audit**: `[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"my-service","Environment":"prod"},"Operation":"GET /api","MetricType":"Latency"}}}]`
+    - **Operation Audit**: `[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"my-service","Environment":"ecs:my-cluster"},"Operation":"GET /api","MetricType":"Latency"}}}]`
+      **Note**: MetricType must be one of: "Latency", "Error", or "Availability"
+      **Note**: Environment format is "platform:cluster-name" (e.g., "ecs:my-cluster", "eks:my-cluster", "lambda")
 
     **WILDCARD PATTERN EXAMPLES:**
     - **All Services**: `[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]`
@@ -292,7 +294,7 @@ async def audit_service_health(
        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]'`
 
     2. **Audit specific service**: 
-       `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"orders-service","Environment":"prod"}}}]'`
+       `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"orders-service","Environment":"ecs:orders-cluster"}}}]'`
 
     3. **Audit payment services**: 
        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*payment*"}}}]'`
@@ -307,13 +309,13 @@ async def audit_service_health(
        When user asks to audit GET operations in payment services (for any metric type):
        1. **First Call**: Use `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*payment*"}}}]'` with `auditors="operation_metric"` to discover payment services and their operations
        2. **Analysis**: From the results, identify GET operations in the findings (look for operations containing "GET" in the operation names)
-       3. **Follow-up**: If specific GET operations need deeper investigation, use service_operation targets with the exact operation names and desired MetricType (Latency/Fault/Error)
+       3. **Follow-up**: If specific GET operations need deeper investigation, use service_operation targets with the exact operation names and desired MetricType (Latency/Error/Availability)
        
        This approach ensures you:
        - Use wildcard matching (*payment*) to find all payment-related services with fuzzy matching
        - Include operation_metric auditor to get detailed operation-level metrics data for all metric types
        - Get comprehensive results showing all GET operations and their latency, fault, and error metrics
-       - Can then drill down into specific problematic GET operations with the appropriate MetricType if needed
+       - Can then drill down into specific problematic GET operations with the appropriate MetricType (Latency/Error/Availability) if needed
 
     6. **Audit availability of visit operations**: 
        `audit_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*"},"Operation":"*visit*","MetricType":"Availability"}}}]'`
@@ -322,16 +324,40 @@ async def audit_service_health(
        `audit_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*"},"Operation":"*visit*","MetricType":"Latency"}}}]'`
 
     8. **Audit lambda latencies**: 
-       `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*lambda*"}}}]'` + focus on Latency metrics
+       **WORKFLOW FOR LAMBDA SERVICE DISCOVERY:**
+       Lambda is one of the AWS service platforms. To audit lambda services properly:
+       1. **First**: Call `list_monitored_services()` to discover all services and their platformType attributes
+       2. **Filter**: Identify services where platformType indicates "lambda" platform
+       3. **Audit**: Use those lambda services in audit targets for latency analysis
+       
+       **Alternative approach**: Use wildcard pattern `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*","Environment":"lambda"}}}]'` to automatically discover lambda services by Environment, or use service name patterns if lambda services follow naming conventions like `*lambda*`
+       
+       **Example**: `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*lambda*"}}}]'` + focus on Latency metrics
 
     9. **Audit service last night**: 
-       `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"orders-service","Environment":"prod"}}}]'` + `start_time="2024-01-01 18:00:00"` + `end_time="2024-01-02 06:00:00"`
+       `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"orders-service","Environment":"ecs:orders-cluster"}}}]'` + `start_time="2024-01-01 18:00:00"` + `end_time="2024-01-02 06:00:00"`
 
     10. **Audit service before and after time**: 
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"orders-service","Environment":"prod"}}}]'` + `start_time="2024-01-01 09:00:00"` + `end_time="2024-01-01 11:00:00"`
+        **WORKFLOW FOR BEFORE/AFTER COMPARISON ANALYSIS:**
+        This use case compares service health before and after a specific time point (e.g., deployment, incident, configuration change) to identify differences and impact.
+        
+        **Step 1 - Audit BEFORE period:**
+        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"orders-service","Environment":"ecs:orders-cluster"}}}]'` + `start_time="2024-01-01 08:00:00"` + `end_time="2024-01-01 10:00:00"`
+        
+        **Step 2 - Audit AFTER period:**
+        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"orders-service","Environment":"ecs:orders-cluster"}}}]'` + `start_time="2024-01-01 10:00:00"` + `end_time="2024-01-01 12:00:00"`
+        
+        **Step 3 - Compare results:**
+        Analyze the audit findings from both periods to identify:
+        - New issues that appeared after the time point
+        - Resolved issues from the before period
+        - Changes in performance metrics (latency, error rates)
+        - SLO compliance differences
+        
+        **Example**: Compare service health before and after a deployment at 10:00 AM to assess deployment impact
 
-    11. **Trace availability issues in prod services**: 
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*","Environment":"prod"}}}]'` + `auditors="all"`
+    11. **Trace availability issues in production services**: 
+        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*","Environment":"ecs:*"}}}]'` + `auditors="all"`
 
     12. **Trace latency in query operations**: 
         `audit_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*payment*"},"Operation":"*query*","MetricType":"Latency"}}}]'` + `auditors="all"`
@@ -340,13 +366,29 @@ async def audit_service_health(
         `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*payment*"}}}]'` + `auditors="log,trace"`
 
     14. **Look for new errors after time**: 
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]'` + `auditors="log,trace"` + `start_time="2024-01-01 10:00:00"`
+        **WORKFLOW FOR BEFORE/AFTER ERROR COMPARISON ANALYSIS:**
+        This use case compares errors before and after a specific time point (e.g., deployment, configuration change, incident) to identify new errors that appeared.
+        
+        **Step 1 - Find errors BEFORE the time point:**
+        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]'` + `auditors="log,trace"` + `start_time="2024-01-01 08:00:00"` + `end_time="2024-01-01 10:00:00"`
+        
+        **Step 2 - Find errors AFTER the time point:**
+        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]'` + `auditors="log,trace"` + `start_time="2024-01-01 10:00:00"` + `end_time="2024-01-01 12:00:00"`
+        
+        **Step 3 - Compare error findings:**
+        Analyze the log and trace findings from both periods to identify:
+        - New error patterns that appeared after the time point
+        - Error types that didn't exist before
+        - Changes in error frequency or severity
+        - Services that started experiencing errors
+        
+        **Example**: Compare errors before and after a deployment at 10:00 AM to identify deployment-related issues
 
     15. **Look for errors after deployment**: 
         `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*payment*"}}}]'` + `auditors="log,trace"` + recent time range
 
-    16. **Look for lemon hosts in prod**: 
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*","Environment":"prod"}}}]'` + `auditors="top_contributor,operation_metric"`
+    16. **Look for lemon hosts in production**: 
+        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*","Environment":"ecs:*"}}}]'` + `auditors="top_contributor,operation_metric"`
 
     17. **Look for outliers in EKS services**: 
         `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*","Environment":"eks:*"}}}]'` + `auditors="top_contributor,operation_metric"`
@@ -2538,7 +2580,7 @@ async def query_sampled_traces(
 async def list_slos(
     key_attributes: str = Field(
         default="{}",
-        description='JSON string of key attributes to filter SLOs (e.g., \'{"Name": "my-service", "Environment": "prod"}\'. Defaults to empty object to list all SLOs.'
+        description='JSON string of key attributes to filter SLOs (e.g., \'{"Name": "my-service", "Environment": "ecs:my-cluster"}\'. Defaults to empty object to list all SLOs.'
     ),
     include_linked_accounts: bool = Field(
         default=True,
