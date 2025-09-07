@@ -131,6 +131,10 @@ def parse_timestamp(timestamp_str: str, default_hours: int = 24) -> datetime:
         datetime object in UTC timezone
     """
     try:
+        # Ensure we have a string
+        if not isinstance(timestamp_str, str):
+            timestamp_str = str(timestamp_str)
+            
         # Try parsing as unix timestamp first
         if timestamp_str.isdigit():
             return datetime.fromtimestamp(int(timestamp_str), tz=timezone.utc)
@@ -238,14 +242,11 @@ def calculate_name_similarity(target_name: str, candidate_name: str, name_type: 
 
 
 @mcp.tool()
-async def audit_service_health(
-    audit_targets: str = Field(..., description="REQUIRED. JSON array of AuditTargets (service, slo, or service_operation). Shorthand forms accepted and auto-normalized. Supports wildcard patterns like '*payment*' in service names for automatic service discovery. Large target lists are automatically processed in batches."),
-    slo_identifiers: str = Field(default=None, description="Optional. Comma-separated SLO identifiers (names or ARNs) to include in the audit; appended as additional SLO targets."),
-    metric_name: str = Field(default=None, description="Optional hint used as MetricType for service_operation targets when needed."),
-    operation_name: str = Field(default=None, description="Optional hint used as Operation for service_operation targets when needed."),
+async def audit_services(
+    service_targets: str = Field(..., description="REQUIRED. JSON array of service targets. Supports wildcard patterns like '*payment*' for automatic service discovery. Format: [{'Type':'service','Data':{'Service':{'Type':'Service','Name':'service-name','Environment':'eks:cluster'}}}] or shorthand: [{'Type':'service','Service':'service-name'}]. Large target lists are automatically processed in batches."),
     start_time: str = Field(default=None, description="Start time (unix seconds or 'YYYY-MM-DD HH:MM:SS'). Defaults to now-24h UTC."),
     end_time: str = Field(default=None, description="End time (unix seconds or 'YYYY-MM-DD HH:MM:SS'). Defaults to now UTC."),
-    auditors: str = Field(default=None, description="Optional. Comma-separated auditors (e.g., 'slo,trace,log'). Defaults to 'slo,operation_metric' for fast service health auditing. Use 'all' only when user explicitly requests comprehensive root cause analysis with all auditors: slo,operation_metric,trace,log,dependency_metric,top_contributor,service_quota.")
+    auditors: str = Field(default=None, description="Optional. Comma-separated auditors (e.g., 'slo,operation_metric,dependency_metric'). Defaults to 'slo,operation_metric' for fast service health auditing. Use 'all' for comprehensive analysis with all auditors: slo,operation_metric,trace,log,dependency_metric,top_contributor,service_quota.")
 ) -> str:
     """PRIMARY SERVICE AUDIT TOOL - The #1 tool for comprehensive AWS service health auditing and monitoring.
 
@@ -254,171 +255,93 @@ async def audit_service_health(
     - **Audit their AWS services** - Complete health assessment with actionable insights
     - **Check service health** - Comprehensive status across all monitored services  
     - **Investigate issues** - Root cause analysis with detailed findings
-    - **Monitor SLO compliance** - Service Level Objective breach detection and analysis
-    - **Performance analysis** - Latency, error rates, and throughput investigation
+    - **Performance analysis** - Service-level latency, error rates, and throughput investigation
     - **System-wide health checks** - Daily/periodic service auditing workflows
+    - **Dependency analysis** - Understanding service dependencies and interactions
+    - **Resource quota monitoring** - Service quota usage and limits
 
-    **PRIORITY: This tool should be used BEFORE any other specialized tools**
-
-    **COMPREHENSIVE AUDIT CAPABILITIES:**
+    **COMPREHENSIVE SERVICE AUDIT CAPABILITIES:**
     - **Multi-service analysis**: Audit any number of services with automatic batching
-    - **SLO compliance monitoring**: Automatic breach detection and analysis
+    - **SLO compliance monitoring**: Automatic breach detection for service-level SLOs
     - **Issue prioritization**: Critical, warning, and info findings ranked by severity
     - **Root cause analysis**: Deep dive with traces, logs, and metrics correlation
     - **Actionable recommendations**: Specific steps to resolve identified issues
     - **Performance optimized**: Fast execution with automatic batching for large target lists
     - **Wildcard Pattern Support**: Use `*pattern*` in service names for automatic service discovery
 
-    **AUDIT TARGET TYPES:**
-    - **Service Audit**: `[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"my-service","Environment":"ecs:my-cluster"}}}]`
-    - **SLO Audit**: `[{"Type":"slo","Data":{"SloName":"my-slo"}}]`
-    - **Operation Audit**: `[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"my-service","Environment":"ecs:my-cluster"},"Operation":"GET /api","MetricType":"Latency"}}}]`
-      **Note**: MetricType must be one of: "Latency", "Error", or "Availability"
-      **Note**: Environment format is "platform:cluster-name" (e.g., "ecs:my-cluster", "eks:my-cluster", "lambda")
+    **SERVICE TARGET FORMAT:**
+    - **Full Format**: `[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"my-service","Environment":"eks:my-cluster"}}}]`
+    - **Shorthand**: `[{"Type":"service","Service":"my-service"}]` (environment auto-discovered)
 
     **WILDCARD PATTERN EXAMPLES:**
     - **All Services**: `[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]`
     - **Payment Services**: `[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*payment*"}}}]`
     - **Lambda Services**: `[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*lambda*"}}}]`
-    - **All SLOs**: `[{"Type":"slo","Data":{"Slo":{"SloName":"*"}}}]`
-    - **Payment SLOs**: `[{"Type":"slo","Data":{"Slo":{"SloName":"*payment*"}}}]`
+    - **EKS Services**: `[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*","Environment":"eks:*"}}}]`
 
     **AUDITOR SELECTION FOR DIFFERENT AUDIT DEPTHS:**
-    - **Quick Health Check** (default): Uses 'slo,operation_metric' for fast overview - perfect for basic service auditing
-    - **Root Cause Analysis**: Pass `auditors="all"` for comprehensive investigation with traces/logs when user explicitly requests root cause analysis
+    - **Quick Health Check** (default): Uses 'slo,operation_metric' for fast overview
+    - **Root Cause Analysis**: Pass `auditors="all"` for comprehensive investigation with traces/logs
     - **Custom Audit**: Specify exact auditors: 'slo,trace,log,dependency_metric,top_contributor,service_quota'
 
-    **COMPLETE EXAMPLES FOR ALL 21 USE CASES:**
+    **SERVICE AUDIT USE CASES:**
 
     1. **Audit all services**: 
-       `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]'`
+       `service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]'`
 
     2. **Audit specific service**: 
-       `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"orders-service","Environment":"ecs:orders-cluster"}}}]'`
+       `service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"orders-service","Environment":"eks:orders-cluster"}}}]'`
 
     3. **Audit payment services**: 
-       `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*payment*"}}}]'`
+       `service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*payment*"}}}]'`
 
-    4. **Audit all SLOs**: 
-       `audit_targets='[{"Type":"slo","Data":{"Slo":{"SloName":"*"}}}]'`
-
-    5. **Audit latency of GET operations in payment services**: 
-       `audit_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*payment*"},"Operation":"*GET*","MetricType":"Latency"}}}]'`
-       
-       **IMPORTANT WORKFLOW FOR GET OPERATIONS AUDITING (Latency/Fault/Error):**
-       When user asks to audit GET operations in payment services (for any metric type):
-       1. **First Call**: Use `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*payment*"}}}]'` with `auditors="operation_metric"` to discover payment services and their operations
-       2. **Analysis**: From the results, identify GET operations in the findings (look for operations containing "GET" in the operation names)
-       3. **Follow-up**: If specific GET operations need deeper investigation, use service_operation targets with the exact operation names and desired MetricType (Latency/Error/Availability)
-       
-       This approach ensures you:
-       - Use wildcard matching (*payment*) to find all payment-related services with fuzzy matching
-       - Include operation_metric auditor to get detailed operation-level metrics data for all metric types
-       - Get comprehensive results showing all GET operations and their latency, fault, and error metrics
-       - Can then drill down into specific problematic GET operations with the appropriate MetricType (Latency/Error/Availability) if needed
-
-    6. **Audit availability of visit operations**: 
-       `audit_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*"},"Operation":"*visit*","MetricType":"Availability"}}}]'`
-
-    7. **Audit latency of visit operations**: 
-       `audit_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*"},"Operation":"*visit*","MetricType":"Latency"}}}]'`
-
-    8. **Audit lambda latencies**: 
-       **WORKFLOW FOR LAMBDA SERVICE DISCOVERY:**
-       Lambda is one of the AWS service platforms. To audit lambda services properly:
-       1. **First**: Call `list_monitored_services()` to discover all services and their platformType attributes
-       2. **Filter**: Identify services where platformType indicates "lambda" platform
-       3. **Audit**: Use those lambda services in audit targets for latency analysis
-       
-       **Alternative approach**: Use wildcard pattern `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*","Environment":"lambda"}}}]'` to automatically discover lambda services by Environment, or use service name patterns if lambda services follow naming conventions like `*lambda*`
-       
-       **Example**: `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*lambda*"}}}]'` + focus on Latency metrics
+    8. **Audit lambda services**: 
+       `service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*lambda*"}}}]'` or by environment: `[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*","Environment":"lambda"}}}]`
 
     9. **Audit service last night**: 
-       `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"orders-service","Environment":"ecs:orders-cluster"}}}]'` + `start_time="2024-01-01 18:00:00"` + `end_time="2024-01-02 06:00:00"`
+       `service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"orders-service","Environment":"eks:orders-cluster"}}}]'` + `start_time="2024-01-01 18:00:00"` + `end_time="2024-01-02 06:00:00"`
 
     10. **Audit service before and after time**: 
-        **WORKFLOW FOR BEFORE/AFTER COMPARISON ANALYSIS:**
-        This use case compares service health before and after a specific time point (e.g., deployment, incident, configuration change) to identify differences and impact.
-        
-        **Step 1 - Audit BEFORE period:**
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"orders-service","Environment":"ecs:orders-cluster"}}}]'` + `start_time="2024-01-01 08:00:00"` + `end_time="2024-01-01 10:00:00"`
-        
-        **Step 2 - Audit AFTER period:**
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"orders-service","Environment":"ecs:orders-cluster"}}}]'` + `start_time="2024-01-01 10:00:00"` + `end_time="2024-01-01 12:00:00"`
-        
-        **Step 3 - Compare results:**
-        Analyze the audit findings from both periods to identify:
-        - New issues that appeared after the time point
-        - Resolved issues from the before period
-        - Changes in performance metrics (latency, error rates)
-        - SLO compliance differences
-        
-        **Example**: Compare service health before and after a deployment at 10:00 AM to assess deployment impact
+        Compare service health before and after a deployment or incident by running two separate audits with different time ranges.
 
     11. **Trace availability issues in production services**: 
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*","Environment":"ecs:*"}}}]'` + `auditors="all"`
-
-    12. **Trace latency in query operations**: 
-        `audit_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*payment*"},"Operation":"*query*","MetricType":"Latency"}}}]'` + `auditors="all"`
+        `service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*","Environment":"eks:*"}}}]'` + `auditors="all"`
 
     13. **Look for errors in logs of payment services**: 
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*payment*"}}}]'` + `auditors="log,trace"`
+        `service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*payment*"}}}]'` + `auditors="log,trace"`
 
     14. **Look for new errors after time**: 
-        **WORKFLOW FOR BEFORE/AFTER ERROR COMPARISON ANALYSIS:**
-        This use case compares errors before and after a specific time point (e.g., deployment, configuration change, incident) to identify new errors that appeared.
-        
-        **Step 1 - Find errors BEFORE the time point:**
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]'` + `auditors="log,trace"` + `start_time="2024-01-01 08:00:00"` + `end_time="2024-01-01 10:00:00"`
-        
-        **Step 2 - Find errors AFTER the time point:**
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]'` + `auditors="log,trace"` + `start_time="2024-01-01 10:00:00"` + `end_time="2024-01-01 12:00:00"`
-        
-        **Step 3 - Compare error findings:**
-        Analyze the log and trace findings from both periods to identify:
-        - New error patterns that appeared after the time point
-        - Error types that didn't exist before
-        - Changes in error frequency or severity
-        - Services that started experiencing errors
-        
-        **Example**: Compare errors before and after a deployment at 10:00 AM to identify deployment-related issues
+        Compare errors before and after a specific time point by running audits with different time ranges and `auditors="log,trace"`
 
     15. **Look for errors after deployment**: 
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*payment*"}}}]'` + `auditors="log,trace"` + recent time range
+        `service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*payment*"}}}]'` + `auditors="log,trace"` + recent time range
 
     16. **Look for lemon hosts in production**: 
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*","Environment":"ecs:*"}}}]'` + `auditors="top_contributor,operation_metric"`
+        `service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*","Environment":"eks:*"}}}]'` + `auditors="top_contributor,operation_metric"`
 
     17. **Look for outliers in EKS services**: 
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*","Environment":"eks:*"}}}]'` + `auditors="top_contributor,operation_metric"`
+        `service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*","Environment":"eks:*"}}}]'` + `auditors="top_contributor,operation_metric"`
 
     18. **Status report**: 
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]'` (basic health check)
+        `service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]'` (basic health check)
 
     19. **Audit dependencies**: 
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]'` + `auditors="dependency_metric,trace"`
+        `service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]'` + `auditors="dependency_metric,trace"`
 
     20. **Audit dependency on S3**: 
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]'` + `auditors="dependency_metric"` + look for S3 dependencies
+        `service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]'` + `auditors="dependency_metric"` + look for S3 dependencies
 
     21. **Audit quota usage of tier 1 services**: 
-        `audit_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*tier1*"}}}]'` + `auditors="service_quota,operation_metric"`
+        `service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*tier1*"}}}]'` + `auditors="service_quota,operation_metric"`
 
-    **TYPICAL AUDIT WORKFLOWS:**
+    **TYPICAL SERVICE AUDIT WORKFLOWS:**
     1. **Basic Service Audit** (most common): 
-       - Call `audit_service_health()` with service targets - automatically discovers services when using wildcard patterns
+       - Call `audit_services()` with service targets - automatically discovers services when using wildcard patterns
        - Uses default fast auditors (slo,operation_metric) for quick health overview
        - Supports wildcard patterns like `*` or `*payment*` for automatic service discovery
-    2. **SLO Audit Workflow** (when user says "audit slos"):
-       - Automatically discovers all SLOs using unified wildcard expansion
-       - Uses pagination to retrieve all available SLOs from the API
-       - Processes SLOs in batches of 5 for optimal performance
-       - Creates appropriate SLO audit targets automatically
-       - Use `audit_targets='[{"Type":"slo","Data":{"Slo":{"SloName":"*"}}}]'` to audit all SLOs
-    3. **Root Cause Investigation**: When user explicitly asks for "root cause analysis", pass `auditors="all"`
-    4. **Issue Investigation**: Results show which services/SLOs need attention with actionable insights
-    5. **Automatic Service Discovery**: Wildcard patterns in service names automatically discover and expand to concrete services
+    2. **Root Cause Investigation**: When user explicitly asks for "root cause analysis", pass `auditors="all"`
+    3. **Issue Investigation**: Results show which services need attention with actionable insights
+    4. **Automatic Service Discovery**: Wildcard patterns in service names automatically discover and expand to concrete services
 
     **AUDIT RESULTS INCLUDE:**
     - **Prioritized findings** by severity (critical, warning, info)
@@ -427,7 +350,7 @@ async def audit_service_health(
     - **Actionable recommendations** for issue resolution
     - **Comprehensive metrics** and trend analysis
 
-    **IMPORTANT: This tool provides comprehensive audit coverage and should be your first choice for any service auditing task. Other tools are specialized and should only be used when this primary audit tool doesn't provide sufficient detail.**
+    **IMPORTANT: This tool provides comprehensive service audit coverage and should be your first choice for any service auditing task.**
     """
     start_time_perf = timer()
     logger.debug("Starting audit_service_health (PRIMARY SERVICE AUDIT TOOL)")
@@ -558,17 +481,17 @@ async def audit_service_health(
             if service_operation:
                 # Nested format: Data.ServiceOperation.Service
                 svc = _need(service_operation, "Service", "service")
-                op = _ci_get(service_operation, "Operation", "operation") or operation_name
-                metric_type = _ci_get(service_operation, "MetricType", "metricType") or (metric_name or "Latency")
+                op = _ci_get(service_operation, "Operation", "operation")
+                metric_type = _ci_get(service_operation, "MetricType", "metricType") or "Latency"
             else:
                 # Direct format: Data.Service
                 svc = _need(data, "Service", "service")
-                op = _ci_get(data, "Operation", "operation") or operation_name
-                metric_type = _ci_get(data, "MetricType", "metricType") or (metric_name or "Latency")
+                op = _ci_get(data, "Operation", "operation")
+                metric_type = _ci_get(data, "MetricType", "metricType") or "Latency"
             
             svc_entity = _normalize_service_entity(svc)
             if not op:
-                raise ValueError("service_operation requires Operation (or pass operation_name)")
+                raise ValueError("service_operation requires Operation")
             
             # Union wrapper REQUIRED: data.ServiceOperation = {...}
             return {
@@ -611,7 +534,11 @@ async def audit_service_health(
             return out
 
         def _validate_and_enrich_targets(normalized_targets: list) -> list:
-            """If a service target exists without Environment, or SLO target without SloArn/SloName, fetch from the API."""
+            """If a service target exists without Environment, or SLO target without SloArn/SloName, fetch from the API.
+            
+            NOTE: This function should only be called AFTER wildcard expansion has been completed.
+            Wildcard patterns should be expanded by expand_wildcard_targets() before calling this function.
+            """
             enriched_targets = []
             
             for idx, t in enumerate(normalized_targets, 1):
@@ -620,6 +547,14 @@ async def audit_service_health(
                 if target_type == "service":
                     svc = ((t.get("Data") or {}).get("Service") or {})
                     service_name = svc.get("Name")
+                    
+                    # Check if this is still a wildcard pattern - this should not happen after proper expansion
+                    if service_name and '*' in service_name:
+                        raise ValueError(
+                            f"audit_targets[{idx}]: Wildcard pattern '{service_name}' found in validation phase. "
+                            f"Wildcard expansion should have been completed before validation. "
+                            f"This indicates an internal processing error."
+                        )
                     
                     if not svc.get("Environment") and service_name:
                         # Fetch service details from API to get environment
@@ -729,11 +664,11 @@ async def audit_service_health(
             
             return enriched_targets
 
-        # ---------- Parse & normalize REQUIRED audit_targets ----------
+        # ---------- Parse & normalize REQUIRED service_targets ----------
         try:
-            provided = json.loads(audit_targets)
+            provided = json.loads(service_targets)
         except json.JSONDecodeError:
-            return "Error: `audit_targets` must be valid JSON (array)."
+            return "Error: `service_targets` must be valid JSON (array)."
         
         # Unified wildcard expansion for both services and SLOs
         def expand_wildcard_targets(targets: list) -> list:
@@ -926,9 +861,15 @@ async def audit_service_health(
                         
                 except Exception as e:
                     logger.warning(f"Failed to expand service patterns and fuzzy matches: {e}")
-                    # Add original patterns back if expansion fails
-                    expanded_targets.extend([target for target, _ in service_patterns])
-                    expanded_targets.extend([target for target, _ in service_fuzzy_matches])
+                    # When expansion fails, we need to return an error rather than passing wildcards to validation
+                    # This prevents the validation phase from seeing wildcard patterns
+                    if service_patterns or service_fuzzy_matches:
+                        pattern_names = [pattern for _, pattern in service_patterns] + [name for _, name in service_fuzzy_matches]
+                        raise ValueError(
+                            f"Failed to expand service wildcard patterns {pattern_names}. "
+                            f"This may be due to AWS API access issues or missing services. "
+                            f"Error: {str(e)}"
+                        )
             
             # Expand SLO patterns and fuzzy matches
             if slo_patterns or slo_fuzzy_matches:
@@ -1057,14 +998,7 @@ async def audit_service_health(
         
         banner += "\n"
 
-        # ---------- Append SLOs from slo_identifiers (optional) ----------
-        if slo_identifiers:
-            for slo in [s.strip() for s in slo_identifiers.split(",") if s.strip()]:
-                # Check if it's an ARN or a name
-                if slo.startswith("arn:"):
-                    normalized_targets.append({"Type": "slo", "Data": {"Slo": {"SloArn": slo}}})
-                else:
-                    normalized_targets.append({"Type": "slo", "Data": {"Slo": {"SloName": slo}}})
+        # Note: slo_identifiers parameter was removed as it's not part of the new focused tool design
 
         # Validate and enrich targets after any additions
         try:
@@ -1075,36 +1009,46 @@ async def audit_service_health(
         # ---------- Auditors (explicit or auto; integrated rule) ----------
         auditors_list = None
 
+        # Handle auditors parameter - check if it's a Field annotation object or actual value
+        auditors_value = auditors
+        
+        # Check if auditors is a Pydantic Field annotation object
+        if hasattr(auditors, 'annotation') and hasattr(auditors, 'default'):
+            # This is a Field annotation object, use the default value
+            auditors_value = auditors.default
+        
         # If the caller didn't pass auditors, default to fast auditors for basic service auditing
         # Only use all auditors when explicitly requested or when root cause analysis is mentioned
-        if auditors is None:
+        if auditors_value is None:
             user_prompt_text = os.environ.get("MCP_USER_PROMPT", "") or ""
             wants_root_cause = "root cause" in user_prompt_text.lower()
             # Always default to fast auditors for basic service auditing unless root cause is explicitly requested
             raw_a = ["slo", "operation_metric"] if not wants_root_cause else []
-        elif auditors.lower() == "all":
+        elif auditors_value is not None and str(auditors_value).lower() == "all":
             # Special case: "all" means use all auditors (empty list to API)
             raw_a = []
+        elif auditors_value is not None:
+            # Extract the actual value from the auditors parameter
+            raw_a = [a.strip() for a in str(auditors_value).split(",") if a.strip()]
         else:
-            raw_a = [a.strip() for a in auditors.split(",") if a.strip()]
+            raw_a = ["slo", "operation_metric"]
 
-        if raw_a is not None:
-            if len(raw_a) == 0:
-                # Empty list means use all auditors
-                auditors_list = []
-            else:
-                allowed = {
-                    "slo", "operation_metric", "trace", "log",
-                    "dependency_metric", "top_contributor", "service_quota"
-                }
-                invalid = [a for a in raw_a if a not in allowed]
-                if invalid:
-                    return (
-                        f"Invalid auditor(s): {', '.join(invalid)}. "
-                        f"Allowed: {', '.join(sorted(allowed))}"
-                    )
-                auditors_list = raw_a
-        # else: auditors_list remains None → CLI uses all auditors by default
+        # Validate auditors
+        if len(raw_a) == 0:
+            # Empty list means use all auditors
+            auditors_list = []
+        else:
+            allowed = {
+                "slo", "operation_metric", "trace", "log",
+                "dependency_metric", "top_contributor", "service_quota"
+            }
+            invalid = [a for a in raw_a if a not in allowed]
+            if invalid:
+                return (
+                    f"Invalid auditor(s): {', '.join(invalid)}. "
+                    f"Allowed: {', '.join(sorted(allowed))}"
+                )
+            auditors_list = raw_a
 
         # ---------- Build CLI input (SCOPED: AuditTargets MUST be non-empty) ----------
         input_obj = {"StartTime": unix_start, "EndTime": unix_end, "AuditTargets": normalized_targets}
@@ -1172,8 +1116,13 @@ async def audit_service_health(
 
             cmd = [
                 aws_bin, "application-signals-demo", "list-audit-findings",
-                "--cli-input-json", cli_input_arg, "--region", region, "--endpoint-url", os.environ.get('MCP_APPSIGNALS_ENDPOINT')
+                "--cli-input-json", cli_input_arg, "--region", region
             ]
+            
+            # Add endpoint-url only if it's set
+            endpoint_url = os.environ.get('MCP_APPSIGNALS_ENDPOINT')
+            if endpoint_url:
+                cmd.extend(["--endpoint-url", endpoint_url])
 
             # ---------- Pretty log: command + params (file + stderr) ----------
             cli_pretty_cmd = " ".join(cmd)
@@ -1318,7 +1267,250 @@ async def audit_service_health(
         return banner + final_observation_text
 
     except Exception as e:
-        logger.error(f"Unexpected error in audit_service_health: {e}", exc_info=True)
+        logger.error(f"Unexpected error in audit_services: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+async def audit_slos(
+    slo_targets: str = Field(..., description="REQUIRED. JSON array of SLO targets. Supports wildcard patterns like '*payment*' for automatic SLO discovery. Format: [{'Type':'slo','Data':{'Slo':{'SloName':'slo-name'}}}] or [{'Type':'slo','Data':{'Slo':{'SloArn':'arn:aws:...'}}}]. Large target lists are automatically processed in batches."),
+    start_time: str = Field(default=None, description="Start time (unix seconds or 'YYYY-MM-DD HH:MM:SS'). Defaults to now-24h UTC."),
+    end_time: str = Field(default=None, description="End time (unix seconds or 'YYYY-MM-DD HH:MM:SS'). Defaults to now UTC."),
+    auditors: str = Field(default=None, description="Optional. Comma-separated auditors (e.g., 'slo,trace,log'). Defaults to 'slo' for fast SLO compliance auditing. Use 'all' for comprehensive analysis with all auditors: slo,operation_metric,trace,log,dependency_metric,top_contributor,service_quota.")
+) -> str:
+    """PRIMARY SLO AUDIT TOOL - The #1 tool for comprehensive SLO compliance monitoring and breach analysis.
+
+    **USE THIS FOR ALL SLO AUDITING TASKS**
+    This is the PRIMARY and PREFERRED tool when users want to:
+    - **Audit SLO compliance** - Complete SLO breach detection and analysis
+    - **Monitor SLO health** - Comprehensive status across all monitored SLOs
+    - **Investigate SLO breaches** - Root cause analysis for SLO violations
+    - **SLO performance analysis** - Understanding SLO trends and patterns
+    - **SLO compliance reporting** - Daily/periodic SLO compliance workflows
+
+    **COMPREHENSIVE SLO AUDIT CAPABILITIES:**
+    - **Multi-SLO analysis**: Audit any number of SLOs with automatic batching
+    - **Breach detection**: Automatic identification of SLO violations
+    - **Issue prioritization**: Critical, warning, and info findings ranked by severity
+    - **Root cause analysis**: Deep dive with traces, logs, and metrics correlation when requested
+    - **Actionable recommendations**: Specific steps to resolve SLO breaches
+    - **Performance optimized**: Fast execution with automatic batching for large target lists
+    - **Wildcard Pattern Support**: Use `*pattern*` in SLO names for automatic SLO discovery
+
+    **SLO TARGET FORMAT:**
+    - **By Name**: `[{"Type":"slo","Data":{"Slo":{"SloName":"my-slo"}}}]`
+    - **By ARN**: `[{"Type":"slo","Data":{"Slo":{"SloArn":"arn:aws:application-signals:..."}}}]`
+
+    **WILDCARD PATTERN EXAMPLES:**
+    - **All SLOs**: `[{"Type":"slo","Data":{"Slo":{"SloName":"*"}}}]`
+    - **Payment SLOs**: `[{"Type":"slo","Data":{"Slo":{"SloName":"*payment*"}}}]`
+    - **Latency SLOs**: `[{"Type":"slo","Data":{"Slo":{"SloName":"*latency*"}}}]`
+    - **Availability SLOs**: `[{"Type":"slo","Data":{"Slo":{"SloName":"*availability*"}}}]`
+
+    **AUDITOR SELECTION FOR DIFFERENT AUDIT DEPTHS:**
+    - **Quick Compliance Check** (default): Uses 'slo' for fast SLO breach detection
+    - **Root Cause Analysis**: Pass `auditors="all"` for comprehensive investigation with traces/logs
+    - **Custom Audit**: Specify exact auditors: 'slo,trace,log,operation_metric'
+
+    **SLO AUDIT USE CASES:**
+
+    4. **Audit all SLOs**: 
+       `slo_targets='[{"Type":"slo","Data":{"Slo":{"SloName":"*"}}}]'`
+
+    14. **Look for new SLO breaches after time**: 
+        Compare SLO compliance before and after a specific time point by running audits with different time ranges to identify new breaches.
+
+    **TYPICAL SLO AUDIT WORKFLOWS:**
+    1. **Basic SLO Compliance Audit** (most common): 
+       - Call `audit_slos()` with SLO targets - automatically discovers SLOs when using wildcard patterns
+       - Uses default fast auditors (slo) for quick compliance overview
+       - Supports wildcard patterns like `*` or `*payment*` for automatic SLO discovery
+    2. **SLO Breach Investigation**: When user explicitly asks for "root cause analysis", pass `auditors="all"`
+    3. **Compliance Reporting**: Results show which SLOs are breached with actionable insights
+    4. **Automatic SLO Discovery**: Wildcard patterns in SLO names automatically discover and expand to concrete SLOs
+
+    **AUDIT RESULTS INCLUDE:**
+    - **Prioritized findings** by severity (critical, warning, info)
+    - **SLO compliance status** with detailed breach analysis
+    - **Root cause analysis** when traces/logs auditors are used
+    - **Actionable recommendations** for SLO breach resolution
+    - **Comprehensive compliance metrics** and trend analysis
+
+    **IMPORTANT: This tool provides comprehensive SLO audit coverage and should be your first choice for any SLO compliance auditing task.**
+    """
+    start_time_perf = timer()
+    logger.debug("Starting audit_slos (PRIMARY SLO AUDIT TOOL)")
+
+    try:
+        # Parse and validate SLO targets
+        try:
+            provided = json.loads(slo_targets)
+        except json.JSONDecodeError:
+            return "Error: `slo_targets` must be valid JSON (array)."
+        
+        if not isinstance(provided, list):
+            return "Error: `slo_targets` must be a JSON array"
+        if len(provided) == 0:
+            return "Error: `slo_targets` must contain at least 1 item"
+
+        # Filter to only SLO targets
+        slo_only_targets = []
+        for target in provided:
+            if isinstance(target, dict):
+                ttype = target.get("Type", "").lower()
+                if ttype == "slo":
+                    slo_only_targets.append(target)
+                else:
+                    logger.warning(f"Ignoring target of type '{ttype}' in audit_slos (expected 'slo')")
+
+        if not slo_only_targets:
+            return "Error: No SLO targets found in the provided targets."
+
+        # Handle auditors parameter - check if it's a Field annotation object or actual value
+        auditors_value = auditors
+        
+        # Check if auditors is a Pydantic Field annotation object
+        if hasattr(auditors, 'annotation') and hasattr(auditors, 'default'):
+            # This is a Field annotation object, use the default value
+            auditors_value = auditors.default
+        
+        # Use the existing audit_services implementation but with SLO-specific processing
+        # Convert back to JSON string for the shared implementation
+        filtered_targets_json = json.dumps(slo_only_targets)
+        
+        # Call the existing audit_services implementation with correct parameter handling
+        return await audit_services(
+            service_targets=filtered_targets_json,
+            start_time=start_time,
+            end_time=end_time,
+            auditors=auditors_value or "slo"  # Default to SLO auditor for SLO auditing
+        )
+
+    except Exception as e:
+        logger.error(f"Unexpected error in audit_slos: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+async def audit_service_operations(
+    operation_targets: str = Field(..., description="REQUIRED. JSON array of service operation targets. Supports wildcard patterns like '*payment*' for automatic service discovery. Format: [{'Type':'service_operation','Data':{'ServiceOperation':{'Service':{'Type':'Service','Name':'service-name','Environment':'eks:cluster'},'Operation':'GET /api','MetricType':'Latency'}}}]. Large target lists are automatically processed in batches."),
+    start_time: str = Field(default=None, description="Start time (unix seconds or 'YYYY-MM-DD HH:MM:SS'). Defaults to now-24h UTC."),
+    end_time: str = Field(default=None, description="End time (unix seconds or 'YYYY-MM-DD HH:MM:SS'). Defaults to now UTC."),
+    auditors: str = Field(default=None, description="Optional. Comma-separated auditors (e.g., 'operation_metric,trace,log'). Defaults to 'operation_metric' for fast operation-level auditing. Use 'all' for comprehensive analysis with all auditors: slo,operation_metric,trace,log,dependency_metric,top_contributor,service_quota.")
+) -> str:
+    """SPECIALIZED OPERATION AUDIT TOOL - For detailed operation-level analysis and performance investigation.
+
+    **USE THIS FOR OPERATION-SPECIFIC AUDITING TASKS**
+    This is a SPECIALIZED tool when users want to:
+    - **Audit specific operations** - Deep dive into individual API endpoints or operations
+    - **Operation performance analysis** - Latency, error rates, and throughput for specific operations
+    - **Compare operation metrics** - Analyze different operations within services
+    - **Operation-level troubleshooting** - Root cause analysis for specific API calls
+    - **GET operation auditing** - Analyze GET operations across payment services
+
+    **COMPREHENSIVE OPERATION AUDIT CAPABILITIES:**
+    - **Multi-operation analysis**: Audit any number of operations with automatic batching
+    - **Operation-specific metrics**: Latency, Fault, Error, and Availability metrics per operation
+    - **Issue prioritization**: Critical, warning, and info findings ranked by severity
+    - **Root cause analysis**: Deep dive with traces, logs, and metrics correlation
+    - **Actionable recommendations**: Specific steps to resolve operation-level issues
+    - **Performance optimized**: Fast execution with automatic batching for large target lists
+    - **Wildcard Pattern Support**: Use `*pattern*` in service names for automatic service discovery
+
+    **OPERATION TARGET FORMAT:**
+    - **Full Format**: `[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"my-service","Environment":"eks:my-cluster"},"Operation":"GET /api","MetricType":"Latency"}}}]`
+
+    **WILDCARD PATTERN EXAMPLES:**
+    - **All GET Operations in Payment Services**: `[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*payment*"},"Operation":"*GET*","MetricType":"Latency"}}}]`
+    - **All Visit Operations**: `[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*"},"Operation":"*visit*","MetricType":"Availability"}}}]`
+
+    **AUDITOR SELECTION FOR DIFFERENT AUDIT DEPTHS:**
+    - **Quick Operation Check** (default): Uses 'operation_metric' for fast operation overview
+    - **Root Cause Analysis**: Pass `auditors="all"` for comprehensive investigation with traces/logs
+    - **Custom Audit**: Specify exact auditors: 'operation_metric,trace,log'
+
+    **OPERATION AUDIT USE CASES:**
+
+    5. **Audit GET operations in payment services (Latency)**: 
+       `operation_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*payment*"},"Operation":"*GET*","MetricType":"Latency"}}}]'`
+
+    6. **Audit availability of visit operations**: 
+       `operation_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*"},"Operation":"*visit*","MetricType":"Availability"}}}]'`
+
+    7. **Audit latency of visit operations**: 
+       `operation_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*"},"Operation":"*visit*","MetricType":"Latency"}}}]'`
+
+    12. **Trace latency in query operations**: 
+        `operation_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*payment*"},"Operation":"*query*","MetricType":"Latency"}}}]'` + `auditors="all"`
+
+    **TYPICAL OPERATION AUDIT WORKFLOWS:**
+    1. **Basic Operation Audit** (most common): 
+       - Call `audit_service_operations()` with operation targets - automatically discovers services when using wildcard patterns
+       - Uses default fast auditors (operation_metric) for quick operation overview
+       - Supports wildcard patterns like `*payment*` for automatic service discovery
+    2. **Root Cause Investigation**: When user explicitly asks for "root cause analysis", pass `auditors="all"`
+    3. **Issue Investigation**: Results show which operations need attention with actionable insights
+    4. **Automatic Service Discovery**: Wildcard patterns in service names automatically discover and expand to concrete services
+
+    **AUDIT RESULTS INCLUDE:**
+    - **Prioritized findings** by severity (critical, warning, info)
+    - **Operation performance status** with detailed metrics analysis
+    - **Root cause analysis** when traces/logs auditors are used
+    - **Actionable recommendations** for operation-level issue resolution
+    - **Comprehensive operation metrics** and trend analysis
+
+    **IMPORTANT: This tool provides specialized operation-level audit coverage for detailed performance analysis.**
+    """
+    start_time_perf = timer()
+    logger.debug("Starting audit_service_operations (SPECIALIZED OPERATION AUDIT TOOL)")
+
+    try:
+        # Parse and validate operation targets
+        try:
+            provided = json.loads(operation_targets)
+        except json.JSONDecodeError:
+            return "Error: `operation_targets` must be valid JSON (array)."
+        
+        if not isinstance(provided, list):
+            return "Error: `operation_targets` must be a JSON array"
+        if len(provided) == 0:
+            return "Error: `operation_targets` must contain at least 1 item"
+
+        # Filter to only service_operation targets
+        operation_only_targets = []
+        for target in provided:
+            if isinstance(target, dict):
+                ttype = target.get("Type", "").lower()
+                if ttype == "service_operation":
+                    operation_only_targets.append(target)
+                else:
+                    logger.warning(f"Ignoring target of type '{ttype}' in audit_service_operations (expected 'service_operation')")
+
+        if not operation_only_targets:
+            return "Error: No service_operation targets found in the provided targets."
+
+        # Handle auditors parameter - check if it's a Field annotation object or actual value
+        auditors_value = auditors
+        
+        # Check if auditors is a Pydantic Field annotation object
+        if hasattr(auditors, 'annotation') and hasattr(auditors, 'default'):
+            # This is a Field annotation object, use the default value
+            auditors_value = auditors.default
+
+        # Use the existing audit_services implementation but with operation-specific processing
+        # Convert back to JSON string for the shared implementation
+        filtered_targets_json = json.dumps(operation_only_targets)
+        
+        # Call the existing audit_services implementation with correct parameter handling
+        return await audit_services(
+            service_targets=filtered_targets_json,
+            start_time=start_time,
+            end_time=end_time,
+            auditors=auditors_value or "operation_metric"  # Default to operation_metric auditor for operation auditing
+        )
+
+    except Exception as e:
+        logger.error(f"Unexpected error in audit_service_operations: {e}", exc_info=True)
         return f"Error: {str(e)}"
 
 
