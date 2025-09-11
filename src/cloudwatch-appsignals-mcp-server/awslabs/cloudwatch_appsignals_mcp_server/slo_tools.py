@@ -309,7 +309,7 @@ async def list_slos(
             return f'Error: Invalid JSON in key_attributes parameter: {str(e)}'
 
         # Validate max_results
-        max_results = min(max(max_results, 1), 100)  # Ensure between 1 and 100
+        max_results = min(max(max_results, 1), 50)  # Ensure between 1 and 50
 
         # Build request parameters
         request_params = {
