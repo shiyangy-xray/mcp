@@ -273,20 +273,38 @@ async def query_sampled_traces(
     ),
     region: str = Field(default='us-east-1', description='AWS region (default: us-east-1)'),
 ) -> str:
-    """Query AWS X-Ray traces (5% sampled data) to investigate errors and performance issues.
+    """SECONDARY TRACE TOOL - Query AWS X-Ray traces (5% sampled data) for trace investigation.
 
-    ⚠️ IMPORTANT: This tool uses X-Ray's 5% sampled trace data. For 100% trace visibility,
-    enable Transaction Search and use search_transaction_spans() instead.
+    ⚠️ **IMPORTANT: Consider using audit_slos() with auditors="all" instead for comprehensive root cause analysis**
+    
+    **RECOMMENDED WORKFLOW FOR SLO BREACH INVESTIGATION:**
+    1. Use get_slo() to understand SLO configuration
+    2. **Use audit_slos() with auditors="all"** for comprehensive root cause analysis (PREFERRED)
+    3. Only use this tool if you need specific trace filtering that audit_slos() doesn't provide
 
-    Use this tool to:
-    - Find root causes of errors and faults (with 5% sampling limitations)
-    - Analyze request latency and identify bottlenecks
-    - Understand the requests across multiple services with traces
-    - Debug timeout and dependency issues
-    - Understand service-to-service interactions
-    - Find customer impact from trace result such as Users data or trace attributes such as owner id
+    **WHY audit_slos() IS PREFERRED:**
+    - **Comprehensive analysis**: Combines traces, logs, metrics, and dependencies
+    - **Actionable recommendations**: Provides specific steps to resolve issues
+    - **Integrated findings**: Correlates multiple data sources for better insights
+    - **Much more effective** than individual trace analysis
 
-    Common filter expressions:
+    ⚠️ **LIMITATIONS OF THIS TOOL:**
+    - Uses X-Ray's **5% sampled trace data** - may miss critical errors
+    - **Limited context** compared to comprehensive audit tools
+    - **No integrated analysis** with logs, metrics, or dependencies
+    - For 100% trace visibility, enable Transaction Search and use search_transaction_spans()
+
+    **Use this tool only when:**
+    - You need specific X-Ray filter expressions not available in audit tools
+    - You're doing exploratory trace analysis outside of SLO breach investigation
+    - You need raw trace data for custom analysis
+
+    **For SLO breach root cause analysis, use audit_slos() instead:**
+    ```
+    audit_slos(slo_targets='[{"Type":"slo","Data":{"Slo":{"SloName":"your-slo-name"}}}]', auditors="all")
+    ```
+
+    Common filter expressions (if you must use this tool):
     - 'service("service-name"){fault = true}': Find all traces with faults (5xx errors) for a service
     - 'service("service-name")': Filter by specific service
     - 'duration > 5': Find slow requests (over 5 seconds)
@@ -294,9 +312,6 @@ async def query_sampled_traces(
     - 'annotation[aws.local.operation]="GET /owners/*/lastname"': Filter by specific operation (from metric dimensions)
     - 'annotation[aws.remote.operation]="ListOwners"': Filter by remote operation name
     - Combine filters: 'service("api"){fault = true} AND annotation[aws.local.operation]="POST /visits"'
-
-    IMPORTANT: When investigating SLO breaches, use annotation filters with the specific dimension values
-    from the breached metric (e.g., Operation, RemoteOperation) to find traces for that exact operation.
 
     Returns JSON with trace summaries including:
     - Trace ID for detailed investigation
@@ -307,10 +322,7 @@ async def query_sampled_traces(
     - User information if available
     - Exception root causes (ErrorRootCauses, FaultRootCauses, ResponseTimeRootCauses)
 
-    Best practices:
-    - Start with recent time windows (last 1-3 hours)
-    - Use filter expressions to narrow down issues and query Fault and Error traces for high priority
-    - Look for patterns in errors or very slow requests
+    **RECOMMENDATION: Use audit_slos() with auditors="all" for comprehensive root cause analysis instead of this tool.**
 
     Returns:
         JSON string containing trace summaries with error status, duration, and service details

@@ -29,11 +29,17 @@ async def get_slo(
 ) -> str:
     """Get detailed information about a specific Service Level Objective (SLO).
 
+    **RECOMMENDED WORKFLOW AFTER USING THIS TOOL:**
+    After getting SLO configuration details, use `audit_slos()` with `auditors="all"` for comprehensive root cause analysis:
+    - `audit_slos(slo_targets='[{"Type":"slo","Data":{"Slo":{"SloName":"your-slo-name"}}}]', auditors="all")`
+    - This provides deep root cause analysis with traces, logs, metrics, and dependencies
+    - Much more comprehensive than using individual trace tools
+
     Use this tool to:
     - Get comprehensive SLO configuration details
     - Understand what metrics the SLO monitors
     - See threshold values and comparison operators
-    - Extract operation names and key attributes for trace queries
+    - Extract operation names and key attributes for further investigation
     - Identify dependency configurations
     - Review attainment goals and burn rate settings
 
@@ -47,10 +53,12 @@ async def get_slo(
     - Burn rate configurations
 
     This tool is essential for:
-    - Understanding why an SLO was breached
-    - Getting the exact operation name to query traces
+    - Understanding SLO configuration before deep investigation
+    - Getting the exact SLO name/ARN for use with audit_slos()
     - Identifying the metrics and thresholds being monitored
-    - Planning remediation based on SLO configuration
+    - Planning comprehensive root cause analysis workflow
+
+    **NEXT STEP: Use audit_slos() with auditors="all" for root cause analysis**
     """
     start_time_perf = timer()
     logger.info(f'Starting get_service_level_objective request for SLO: {slo_id}')

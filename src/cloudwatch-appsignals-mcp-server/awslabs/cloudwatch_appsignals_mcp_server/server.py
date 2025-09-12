@@ -112,6 +112,7 @@ except Exception as e:
 # Import shared audit utilities
 from .audit_utils import execute_audit_cli, parse_auditors, expand_service_wildcard_patterns, expand_slo_wildcard_patterns, expand_service_operation_wildcard_patterns
 from .service_audit_utils import normalize_service_targets, validate_and_enrich_service_targets
+from .audit_presentation_utils import extract_findings_summary, format_findings_summary
 
 
 @mcp.tool()
@@ -224,6 +225,14 @@ async def audit_services(
     - **Comprehensive metrics** and trend analysis
 
     **IMPORTANT: This tool provides comprehensive service audit coverage and should be your first choice for any service auditing task.**
+    
+    **WHEN MULTIPLE FINDINGS ARE RETURNED:**
+    If the audit returns multiple findings or issues, DO NOT immediately jump into root cause analysis of one specific issue. Instead:
+    1. Present the audit results to the user showing all findings
+    2. Ask the user which specific finding or service they want to investigate in detail
+    3. Then perform targeted root cause analysis using auditors="all" for the selected finding
+    
+    This ensures the user can prioritize which issues are most important to investigate first.
     """
     start_time_perf = timer()
     logger.debug("Starting audit_services (PRIMARY SERVICE AUDIT TOOL)")
@@ -282,7 +291,6 @@ async def audit_services(
 
         elapsed = timer() - start_time_perf
         logger.debug(f"audit_services completed in {elapsed:.3f}s (region={region})")
-
         return result
 
     except Exception as e:
@@ -299,11 +307,18 @@ async def audit_slos(
 ) -> str:
     """PRIMARY SLO AUDIT TOOL - The #1 tool for comprehensive SLO compliance monitoring and breach analysis.
 
+    **PREFERRED TOOL FOR SLO ROOT CAUSE ANALYSIS**
+    This is the RECOMMENDED tool after using get_slo() to understand SLO configuration:
+    - **Use auditors="all" for comprehensive root cause analysis** of specific SLO breaches
+    - **Much more comprehensive than individual trace tools** - provides integrated analysis
+    - **Combines traces, logs, metrics, and dependencies** in a single comprehensive audit
+    - **Provides actionable recommendations** based on multi-dimensional analysis
+
     **USE THIS FOR ALL SLO AUDITING TASKS**
     This is the PRIMARY and PREFERRED tool when users want to:
+    - **Root cause analysis for SLO breaches** - Deep investigation with all auditors
     - **Audit SLO compliance** - Complete SLO breach detection and analysis
     - **Monitor SLO health** - Comprehensive status across all monitored SLOs
-    - **Investigate SLO breaches** - Root cause analysis for SLO violations
     - **SLO performance analysis** - Understanding SLO trends and patterns
     - **SLO compliance reporting** - Daily/periodic SLO compliance workflows
 
@@ -311,7 +326,7 @@ async def audit_slos(
     - **Multi-SLO analysis**: Audit any number of SLOs with automatic batching
     - **Breach detection**: Automatic identification of SLO violations
     - **Issue prioritization**: Critical, warning, and info findings ranked by severity
-    - **Root cause analysis**: Deep dive with traces, logs, and metrics correlation when requested
+    - **COMPREHENSIVE ROOT CAUSE ANALYSIS**: Deep dive with traces, logs, metrics, and dependencies
     - **Actionable recommendations**: Specific steps to resolve SLO breaches
     - **Performance optimized**: Fast execution with automatic batching for large target lists
     - **Wildcard Pattern Support**: Use `*pattern*` in SLO names for automatic SLO discovery
@@ -328,7 +343,7 @@ async def audit_slos(
 
     **AUDITOR SELECTION FOR DIFFERENT AUDIT DEPTHS:**
     - **Quick Compliance Check** (default): Uses 'slo' for fast SLO breach detection
-    - **Root Cause Analysis**: Pass `auditors="all"` for comprehensive investigation with traces/logs
+    - **COMPREHENSIVE ROOT CAUSE ANALYSIS** (recommended): Pass `auditors="all"` for deep investigation with traces/logs/metrics/dependencies
     - **Custom Audit**: Specify exact auditors: 'slo,trace,log,operation_metric'
 
     **SLO AUDIT USE CASES:**
@@ -336,26 +351,40 @@ async def audit_slos(
     4. **Audit all SLOs**: 
        `slo_targets='[{"Type":"slo","Data":{"Slo":{"SloName":"*"}}}]'`
 
+    22. **Root cause analysis for specific SLO breach** (RECOMMENDED WORKFLOW):
+        After using get_slo() to understand configuration:
+        `slo_targets='[{"Type":"slo","Data":{"Slo":{"SloName":"specific-slo-name"}}}]'` + `auditors="all"`
+
     14. **Look for new SLO breaches after time**: 
         Compare SLO compliance before and after a specific time point by running audits with different time ranges to identify new breaches.
 
     **TYPICAL SLO AUDIT WORKFLOWS:**
-    1. **Basic SLO Compliance Audit** (most common): 
+    1. **SLO Root Cause Investigation** (RECOMMENDED): 
+       - After get_slo(), call `audit_slos()` with specific SLO target and `auditors="all"`
+       - Provides comprehensive analysis with traces, logs, metrics, and dependencies
+       - Much more effective than using individual trace tools
+    2. **Basic SLO Compliance Audit**: 
        - Call `audit_slos()` with SLO targets - automatically discovers SLOs when using wildcard patterns
        - Uses default fast auditors (slo) for quick compliance overview
-       - Supports wildcard patterns like `*` or `*payment*` for automatic SLO discovery
-    2. **SLO Breach Investigation**: When user explicitly asks for "root cause analysis", pass `auditors="all"`
     3. **Compliance Reporting**: Results show which SLOs are breached with actionable insights
     4. **Automatic SLO Discovery**: Wildcard patterns in SLO names automatically discover and expand to concrete SLOs
 
     **AUDIT RESULTS INCLUDE:**
     - **Prioritized findings** by severity (critical, warning, info)
     - **SLO compliance status** with detailed breach analysis
-    - **Root cause analysis** when traces/logs auditors are used
+    - **COMPREHENSIVE ROOT CAUSE ANALYSIS** when using auditors="all"
     - **Actionable recommendations** for SLO breach resolution
-    - **Comprehensive compliance metrics** and trend analysis
+    - **Integrated traces, logs, metrics, and dependency analysis**
 
-    **IMPORTANT: This tool provides comprehensive SLO audit coverage and should be your first choice for any SLO compliance auditing task.**
+    **IMPORTANT: This tool provides comprehensive SLO audit coverage and should be your first choice for any SLO compliance auditing and root cause analysis.**
+    
+    **WHEN MULTIPLE FINDINGS ARE RETURNED:**
+    If the audit returns multiple findings or issues, DO NOT immediately jump into root cause analysis of one specific issue. Instead:
+    1. Present the audit results to the user showing all findings
+    2. Ask the user which specific finding or SLO they want to investigate in detail
+    3. Then perform targeted root cause analysis using auditors="all" for the selected finding
+    
+    This ensures the user can prioritize which issues are most important to investigate first.
     """
     start_time_perf = timer()
     logger.debug("Starting audit_slos (PRIMARY SLO AUDIT TOOL)")
@@ -462,7 +491,6 @@ async def audit_slos(
 
         elapsed = timer() - start_time_perf
         logger.debug(f"audit_slos completed in {elapsed:.3f}s (region={region})")
-
         return result
 
     except Exception as e:
@@ -539,6 +567,14 @@ async def audit_service_operations(
     - **Comprehensive operation metrics** and trend analysis
 
     **IMPORTANT: This tool provides specialized operation-level audit coverage for detailed performance analysis.**
+    
+    **WHEN MULTIPLE FINDINGS ARE RETURNED:**
+    If the audit returns multiple findings or issues, DO NOT immediately jump into root cause analysis of one specific issue. Instead:
+    1. Present the audit results to the user showing all findings
+    2. Ask the user which specific finding or operation they want to investigate in detail
+    3. Then perform targeted root cause analysis using auditors="all" for the selected finding
+    
+    This ensures the user can prioritize which issues are most important to investigate first.
     """
     start_time_perf = timer()
     logger.debug("Starting audit_service_operations (SPECIALIZED OPERATION AUDIT TOOL)")
@@ -659,7 +695,6 @@ async def audit_service_operations(
 
         elapsed = timer() - start_time_perf
         logger.debug(f"audit_service_operations completed in {elapsed:.3f}s (region={region})")
-
         return result
 
     except Exception as e:
