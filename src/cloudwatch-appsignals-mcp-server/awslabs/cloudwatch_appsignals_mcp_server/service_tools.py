@@ -28,7 +28,9 @@ from .utils import parse_timestamp
 
 
 async def list_monitored_services() -> str:
-    """OPTIONAL TOOL for service discovery - audit_service_health() can automatically discover services using wildcard patterns.
+    """OPTIONAL TOOL for service discovery - audit_services() can automatically discover services using wildcard patterns.
+
+    **IMPORTANT: For service auditing and operation analysis, use audit_services() as the PRIMARY tool instead.**
 
     **WHEN TO USE THIS TOOL:**
     - Getting a detailed overview of all monitored services in your environment
@@ -36,21 +38,38 @@ async def list_monitored_services() -> str:
     - Understanding the complete service inventory before targeted analysis
     - When you need detailed service attributes beyond what wildcard expansion provides
 
-    **RECOMMENDED WORKFLOW:**
-    - **Primary**: Use `audit_service_health()` with wildcard patterns like `[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]` for automatic service discovery
-    - **Alternative**: Use this tool first if you need detailed service information, then construct specific audit targets
+    **RECOMMENDED WORKFLOW FOR SERVICE AND OPERATION AUDITING:**
+    1. **Use audit_services() FIRST** with wildcard patterns for comprehensive service discovery AND analysis
+    2. **Only use this tool** if you need basic service inventory without performance analysis
+    3. **audit_services() is more comprehensive** - it discovers services AND provides performance insights
 
     **AUTOMATIC SERVICE DISCOVERY IN AUDIT:**
-    The `audit_service_health()` tool automatically discovers services when you use wildcard patterns:
+    The `audit_services()` tool automatically discovers services when you use wildcard patterns:
     - `[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]` - Audits all services
     - `[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*payment*"}}}]` - Audits services with "payment" in the name
+
+    **What this tool provides:**
+    - Basic service inventory (names, types, environments)
+    - Service count and categorization
+    - Key attributes for manual target construction
+
+    **What this tool does NOT provide:**
+    - Service performance analysis
+    - Operation discovery and analysis
+    - Root cause analysis
+    - Actionable recommendations
+
+    **For comprehensive service auditing, use audit_services() instead:**
+    ```
+    audit_services(service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"*"}}}]', auditors="all")
+    ```
 
     Returns a formatted list showing:
     - Service name and type  
     - Key attributes (Name, Environment, Platform, etc.)
     - Total count of services
 
-    **NOTE**: The audit_service_health() tool can automatically discover and audit services without requiring this tool first.
+    **NOTE**: For operation auditing, use audit_services() as the primary tool instead of get_service_detail() or list_service_operations().
     """
     start_time_perf = timer()
     logger.debug('Starting list_application_signals_services request')
@@ -107,21 +126,32 @@ async def get_service_detail(
 ) -> str:
     """Get detailed information about a specific Application Signals service.
 
-    Use this tool when you need to:
-    - Understand a service's configuration and setup
-    - Understand where this servive is deployed and where it is running such as EKS, Lambda, etc.
-    - See what metrics are available for a service
-    - Find log groups associated with the service
-    - Get service metadata and attributes
+    **IMPORTANT: For operation auditing, use audit_services() as the PRIMARY tool instead.**
 
-    Returns comprehensive details including:
+    **RECOMMENDED WORKFLOW FOR OPERATION AUDITING:**
+    1. **Use audit_services() FIRST** for comprehensive operation discovery and analysis
+    2. **Only use this tool** for basic service metadata and configuration details
+    3. **This tool does NOT provide operation names** - it only shows service-level metrics
+
+    **What this tool provides:**
+    - Service metadata and configuration
+    - Platform information (EKS, Lambda, etc.)
+    - Service-level metrics (Latency, Error, Fault aggregates)
+    - Log groups associated with the service
     - Key attributes (Type, Environment, Platform)
-    - Available CloudWatch metrics with namespaces
-    - Metric dimensions and types
-    - Associated log groups for debugging
 
-    This tool is essential before querying specific metrics, as it shows
-    which metrics are available for the service.
+    **What this tool does NOT provide:**
+    - Operation names (GET, POST, etc.)
+    - Operation-specific metrics
+    - Operation-level performance data
+
+    **For operation auditing, use audit_services() instead:**
+    ```
+    audit_services(service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"your-service"}}}]', auditors="all")
+    ```
+
+    This tool is useful for understanding service deployment details and basic configuration,
+    but audit_services() is the primary tool for operation discovery and performance analysis.
     """
     start_time_perf = timer()
     logger.debug(f'Starting get_service_healthy_detail request for service: {service_name}')
@@ -407,6 +437,192 @@ async def query_service_metrics(
     except Exception as e:
         logger.error(
             f"Unexpected error in query_service_metrics for '{service_name}/{metric_name}': {str(e)}",
+            exc_info=True,
+        )
+        return f'Error: {str(e)}'
+
+
+async def list_service_operations(
+    service_name: str = Field(
+        ..., description='Name of the service to list operations for (case-sensitive)'
+    ),
+    hours: int = Field(
+        default=24, description='Number of hours to look back for operation discovery (default 24, max 24 for Application Signals operation discovery)'
+    ),
+) -> str:
+    """OPERATION DISCOVERY TOOL - For operation inventory only. Use audit_services() as PRIMARY tool for operation auditing.
+
+    **IMPORTANT: For operation auditing and performance analysis, use audit_services() as the PRIMARY tool instead.**
+
+    **CRITICAL LIMITATION: This tool only discovers operations that have been ACTIVELY INVOKED in the specified time window.**
+    - **Maximum time window: 24 hours** (Application Signals limitation for operation discovery)
+    - **No results = No operation invocations** in the time window (operations exist but weren't called)
+    - **Empty results do NOT mean operations don't exist** - they may just be inactive
+    - **For comprehensive operation analysis regardless of recent activity, use audit_services() instead**
+
+    **RECOMMENDED WORKFLOW FOR OPERATION AUDITING:**
+    1. **Use audit_services() FIRST** for comprehensive operation discovery AND performance analysis
+    2. **Only use this tool** if you need a simple operation inventory of RECENTLY ACTIVE operations
+    3. **audit_services() is more comprehensive** - it discovers operations AND provides performance insights even for inactive operations
+
+    **What this tool provides:**
+    - Basic operation inventory (names and available metric types) for RECENTLY INVOKED operations only
+    - Operation count and categorization (GET, POST, etc.) for active operations
+    - Time range for discovery (max 24 hours)
+
+    **What this tool does NOT provide:**
+    - Operations that exist but weren't invoked in the time window
+    - Operation performance analysis
+    - Latency, error rate, or fault analysis
+    - Root cause analysis
+    - Actionable recommendations
+
+    **For comprehensive operation auditing, use audit_services() instead:**
+    ```
+    audit_services(service_targets='[{"Type":"service","Data":{"Service":{"Type":"Service","Name":"your-service"}}}]', auditors="all")
+    ```
+
+    **OPERATION DISCOVERY USE CASES (when audit_services is not sufficient):**
+
+    1. **Active operation inventory**: When you only need recently invoked operation names without performance data
+    2. **Traffic pattern analysis**: To see which operations are currently being used
+    3. **Quick active operation count**: To understand current operation activity of a service
+
+    **RECOMMENDED WORKFLOW:**
+    1. **Use audit_services() FIRST** for comprehensive operation discovery and analysis
+    2. **Only use this tool** for basic inventory of recently active operations if audit_services() provides too much detail
+
+    This tool provides basic operation discovery for ACTIVE operations only, but audit_services() is the primary tool for 
+    comprehensive operation auditing, performance analysis, and operation insights regardless of recent activity.
+    """
+    start_time_perf = timer()
+    logger.debug(f'Starting list_service_operations request for service: {service_name}')
+
+    try:
+        # Calculate time range - enforce 24 hour maximum for Application Signals operation discovery
+        end_time = datetime.now(timezone.utc)
+        hours = min(hours, 24)  # Enforce maximum of 24 hours
+        start_time = end_time - timedelta(hours=hours)
+
+        # First, get the service to find its key attributes
+        services_response = appsignals_client.list_services(
+            StartTime=start_time, EndTime=end_time, MaxResults=100
+        )
+
+        # Find the target service
+        target_service = None
+        for service in services_response.get('ServiceSummaries', []):
+            key_attrs = service.get('KeyAttributes', {})
+            if key_attrs.get('Name') == service_name:
+                target_service = service
+                break
+
+        if not target_service:
+            logger.warning(f"Service '{service_name}' not found in Application Signals")
+            return f"Service '{service_name}' not found in Application Signals. Use list_monitored_services() to see available services."
+
+        # Get operations for the service using ListServiceOperations API
+        logger.debug(f'Getting operations for service: {service_name}')
+        operations_response = appsignals_client.list_service_operations(
+            StartTime=start_time,
+            EndTime=end_time,
+            KeyAttributes=target_service['KeyAttributes'],
+            MaxResults=100
+        )
+
+        operations = operations_response.get('Operations', [])
+        logger.debug(f'Retrieved {len(operations)} operations for service: {service_name}')
+
+        if not operations:
+            logger.warning(f"No operations found for service '{service_name}' in the last {hours} hours")
+            return (f"No operations found for service '{service_name}' in the last {hours} hours.\n\n"
+                   f"⚠️  IMPORTANT: This means NO OPERATION INVOCATIONS occurred in the time window.\n"
+                   f"   • Operations may exist but were not actively called\n"
+                   f"   • Maximum discovery window is 24 hours for Application Signals\n"
+                   f"   • For comprehensive operation analysis regardless of recent activity, use audit_services()\n"
+                   f"   • Empty results ≠ no operations exist, just no recent invocations")
+
+        # Build detailed response
+        result = f'Operations for Service: {service_name}\n'
+        result += f'Time Range: Last {hours} hour(s)\n'
+        result += f'Total Operations: {len(operations)}\n\n'
+
+        # Group operations by type for better organization
+        get_operations = []
+        post_operations = []
+        other_operations = []
+
+        for operation in operations:
+            operation_name = operation.get('Name', 'Unknown')
+            
+            if 'GET' in operation_name.upper():
+                get_operations.append(operation)
+            elif 'POST' in operation_name.upper():
+                post_operations.append(operation)
+            else:
+                other_operations.append(operation)
+
+        # Display GET operations first (most relevant for the current task)
+        if get_operations:
+            result += f'🔍 GET Operations ({len(get_operations)}):\n'
+            for operation in get_operations:
+                operation_name = operation.get('Name', 'Unknown')
+                result += f'  • {operation_name}\n'
+                
+                # Show available metrics for this operation
+                metric_refs = operation.get('MetricReferences', [])
+                if metric_refs:
+                    metric_types = [ref.get('MetricType', 'Unknown') for ref in metric_refs]
+                    result += f'    Available Metrics: {", ".join(set(metric_types))}\n'
+                result += '\n'
+
+        # Display POST operations
+        if post_operations:
+            result += f'📝 POST Operations ({len(post_operations)}):\n'
+            for operation in post_operations:
+                operation_name = operation.get('Name', 'Unknown')
+                result += f'  • {operation_name}\n'
+                
+                # Show available metrics for this operation
+                metric_refs = operation.get('MetricReferences', [])
+                if metric_refs:
+                    metric_types = [ref.get('MetricType', 'Unknown') for ref in metric_refs]
+                    result += f'    Available Metrics: {", ".join(set(metric_types))}\n'
+                result += '\n'
+
+        # Display other operations
+        if other_operations:
+            result += f'🔧 Other Operations ({len(other_operations)}):\n'
+            for operation in other_operations:
+                operation_name = operation.get('Name', 'Unknown')
+                result += f'  • {operation_name}\n'
+                
+                # Show available metrics for this operation
+                metric_refs = operation.get('MetricReferences', [])
+                if metric_refs:
+                    metric_types = [ref.get('MetricType', 'Unknown') for ref in metric_refs]
+                    result += f'    Available Metrics: {", ".join(set(metric_types))}\n'
+                result += '\n'
+
+        # Add summary for audit planning
+        result += '📊 Operation Discovery Summary:\n'
+        result += f'• Total Operations: {len(operations)}\n'
+        result += f'• GET Operations: {len(get_operations)}\n'
+        result += f'• POST Operations: {len(post_operations)}\n'
+        result += f'• Other Operations: {len(other_operations)}\n\n'
+
+        result += '💡 Next Steps:\n'
+        result += '• Use audit_service_operations() with specific operation targets for detailed analysis\n'
+        result += '• Focus on GET operations for latency auditing\n'
+        result += '• Check operations with Latency metrics for performance analysis\n'
+
+        elapsed_time = timer() - start_time_perf
+        logger.debug(f"list_service_operations completed for '{service_name}' in {elapsed_time:.3f}s")
+        return result
+
+    except Exception as e:
+        logger.error(
+            f"Unexpected error in list_service_operations for '{service_name}': {str(e)}",
             exc_info=True,
         )
         return f'Error: {str(e)}'

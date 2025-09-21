@@ -271,12 +271,17 @@ async def query_sampled_traces(
         default=None,
         description='X-Ray filter expression to narrow results (e.g., service("service-name"){fault = true})',
     ),
-    region: str = Field(default='us-east-1', description='AWS region (default: us-east-1)'),
+    region: Optional[str] = Field(default=None, description='AWS region (defaults to AWS_REGION environment variable)'),
 ) -> str:
     """SECONDARY TRACE TOOL - Query AWS X-Ray traces (5% sampled data) for trace investigation.
 
     ⚠️ **IMPORTANT: Consider using audit_slos() with auditors="all" instead for comprehensive root cause analysis**
     
+    **RECOMMENDED WORKFLOW FOR OPERATION DISCOVERY:**
+    1. **Use `get_service_detail(service_name)` FIRST** to discover operations from metric dimensions
+    2. **Use audit_slos() with auditors="all"** for comprehensive root cause analysis (PREFERRED)
+    3. Only use this tool if you need specific trace filtering that other tools don't provide
+
     **RECOMMENDED WORKFLOW FOR SLO BREACH INVESTIGATION:**
     1. Use get_slo() to understand SLO configuration
     2. **Use audit_slos() with auditors="all"** for comprehensive root cause analysis (PREFERRED)
@@ -288,16 +293,28 @@ async def query_sampled_traces(
     - **Integrated findings**: Correlates multiple data sources for better insights
     - **Much more effective** than individual trace analysis
 
+    **WHY get_service_detail() IS PREFERRED FOR OPERATION DISCOVERY:**
+    - **Direct operation discovery**: Operations are available in metric dimensions
+    - **More reliable**: Uses Application Signals service metadata instead of sampling
+    - **Comprehensive**: Shows all operations, not just those in sampled traces
+
     ⚠️ **LIMITATIONS OF THIS TOOL:**
     - Uses X-Ray's **5% sampled trace data** - may miss critical errors
     - **Limited context** compared to comprehensive audit tools
     - **No integrated analysis** with logs, metrics, or dependencies
+    - **May miss operations** due to sampling - use get_service_detail() for complete operation discovery
     - For 100% trace visibility, enable Transaction Search and use search_transaction_spans()
 
     **Use this tool only when:**
     - You need specific X-Ray filter expressions not available in audit tools
     - You're doing exploratory trace analysis outside of SLO breach investigation
     - You need raw trace data for custom analysis
+    - **After using get_service_detail() for operation discovery**
+
+    **For operation discovery, use get_service_detail() instead:**
+    ```
+    get_service_detail(service_name="your-service-name")
+    ```
 
     **For SLO breach root cause analysis, use audit_slos() instead:**
     ```
@@ -322,12 +339,18 @@ async def query_sampled_traces(
     - User information if available
     - Exception root causes (ErrorRootCauses, FaultRootCauses, ResponseTimeRootCauses)
 
-    **RECOMMENDATION: Use audit_slos() with auditors="all" for comprehensive root cause analysis instead of this tool.**
+    **RECOMMENDATION: Use get_service_detail() for operation discovery and audit_slos() with auditors="all" for comprehensive root cause analysis instead of this tool.**
 
     Returns:
         JSON string containing trace summaries with error status, duration, and service details
     """
     start_time_perf = timer()
+    
+    # Use AWS_REGION environment variable if region not provided
+    if not region:
+        from .aws_clients import AWS_REGION
+        region = AWS_REGION
+    
     logger.info(f'Starting query_sampled_traces - region: {region}, filter: {filter_expression}')
 
     try:

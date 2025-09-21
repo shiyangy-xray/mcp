@@ -242,27 +242,49 @@ def expand_service_wildcard_patterns(targets: List[dict], appsignals_client, uni
     service_patterns = []
     service_fuzzy_matches = []
     
+    logger.debug(f"expand_service_wildcard_patterns: Processing {len(targets)} targets")
+    
     # First pass: identify patterns and collect non-wildcard targets
-    for target in targets:
+    for i, target in enumerate(targets):
+        logger.debug(f"Target {i}: {target}")
+        
         if not isinstance(target, dict):
             expanded_targets.append(target)
             continue
             
         target_type = target.get('Type', '').lower()
+        logger.debug(f"Target {i} type: {target_type}")
         
         if target_type == 'service':
-            service_data = target.get('Data', {}).get('Service', {})
-            service_name = service_data.get('Name', '')
-            if isinstance(service_name, str):
+            # Check multiple possible locations for service name
+            service_name = None
+            
+            # Check Data.Service.Name (full format)
+            service_data = target.get('Data', {})
+            if isinstance(service_data, dict):
+                service_info = service_data.get('Service', {})
+                if isinstance(service_info, dict):
+                    service_name = service_info.get('Name', '')
+            
+            # Check shorthand Service field
+            if not service_name:
+                service_name = target.get('Service', '')
+            
+            logger.debug(f"Target {i} service name: '{service_name}'")
+            
+            if isinstance(service_name, str) and service_name:
                 if '*' in service_name:
+                    logger.debug(f"Target {i} identified as wildcard pattern: '{service_name}'")
                     service_patterns.append((target, service_name))
                 else:
                     # Check if this might be a fuzzy match candidate
                     service_fuzzy_matches.append((target, service_name))
             else:
+                logger.debug(f"Target {i} has no valid service name, passing through")
                 expanded_targets.append(target)
         else:
             # Non-service targets pass through unchanged
+            logger.debug(f"Target {i} is not a service target, passing through")
             expanded_targets.append(target)
     
     # Expand service patterns and fuzzy matches
@@ -284,7 +306,15 @@ def expand_service_wildcard_patterns(targets: List[dict], appsignals_client, uni
                 for service in all_services:
                     service_attrs = service.get('KeyAttributes', {})
                     service_name = service_attrs.get('Name', '')
+                    service_type = service_attrs.get('Type', '')
+                    environment = service_attrs.get('Environment', '')
                     
+                    # Filter out services without proper names or that are not actual services
+                    if not service_name or service_name == 'Unknown' or service_type != 'Service':
+                        logger.debug(f"Skipping service: Name='{service_name}', Type='{service_type}', Environment='{environment}'")
+                        continue
+                    
+                    # Apply search filter
                     if search_term == '' or search_term in service_name.lower():
                         expanded_targets.append({
                             "Type": "service",
@@ -292,11 +322,12 @@ def expand_service_wildcard_patterns(targets: List[dict], appsignals_client, uni
                                 "Service": {
                                     "Type": "Service",
                                     "Name": service_name,
-                                    "Environment": service_attrs.get('Environment')
+                                    "Environment": environment
                                 }
                             }
                         })
                         matches_found += 1
+                        logger.debug(f"Added service: Name='{service_name}', Environment='{environment}'")
                 
                 logger.debug(f"Service pattern '{pattern}' expanded to {matches_found} targets")
             
@@ -430,12 +461,15 @@ def expand_service_operation_wildcard_patterns(targets: List[dict], appsignals_c
         if isinstance(target, dict):
             ttype = target.get("Type", "").lower()
             if ttype == "service_operation":
-                # Check for wildcard patterns in service names
+                # Check for wildcard patterns in service names OR operation names
                 service_op_data = target.get("Data", {}).get("ServiceOperation", {})
                 service_data = service_op_data.get("Service", {})
                 service_name = service_data.get("Name", "")
-                if "*" in service_name:
-                    wildcard_patterns.append((target, service_name))
+                operation = service_op_data.get("Operation", "")
+                
+                # Check if either service name or operation has wildcards
+                if "*" in service_name or "*" in operation:
+                    wildcard_patterns.append((target, service_name, operation))
                 else:
                     expanded_targets.append(target)
             else:
@@ -455,37 +489,107 @@ def expand_service_operation_wildcard_patterns(targets: List[dict], appsignals_c
             )
             all_services = services_response.get('ServiceSummaries', [])
             
-            for original_target, pattern in wildcard_patterns:
-                search_term = pattern.strip('*').lower() if pattern != '*' else ''
+            for original_target, service_pattern, operation_pattern in wildcard_patterns:
+                service_search_term = service_pattern.strip('*').lower() if service_pattern != '*' else ''
+                operation_search_term = operation_pattern.strip('*').lower() if operation_pattern != '*' else ''
                 matches_found = 0
                 
-                # Get the original operation and metric type from the pattern
+                # Get the original metric type from the pattern
                 service_op_data = original_target.get("Data", {}).get("ServiceOperation", {})
-                operation = service_op_data.get("Operation", "")
                 metric_type = service_op_data.get("MetricType", "Latency")
                 
+                # Find matching services
+                matching_services = []
                 for service in all_services:
                     service_attrs = service.get('KeyAttributes', {})
                     service_name = service_attrs.get('Name', '')
+                    service_type = service_attrs.get('Type', '')
                     
-                    if search_term == '' or search_term in service_name.lower():
-                        expanded_targets.append({
-                            "Type": "service_operation",
-                            "Data": {
-                                "ServiceOperation": {
-                                    "Service": {
-                                        "Type": "Service",
-                                        "Name": service_name,
-                                        "Environment": service_attrs.get('Environment')
-                                    },
-                                    "Operation": operation,
-                                    "MetricType": metric_type
-                                }
-                            }
-                        })
-                        matches_found += 1
+                    # Filter out services without proper names or that are not actual services
+                    if not service_name or service_name == 'Unknown' or service_type != 'Service':
+                        continue
+                    
+                    # Check if service matches the pattern
+                    if "*" not in service_pattern:
+                        # Exact service name match
+                        if service_name == service_pattern:
+                            matching_services.append(service)
+                    else:
+                        # Wildcard service name match
+                        if service_search_term == '' or service_search_term in service_name.lower():
+                            matching_services.append(service)
                 
-                logger.debug(f"Service operation pattern '{pattern}' expanded to {matches_found} targets")
+                logger.debug(f"Found {len(matching_services)} services matching pattern '{service_pattern}'")
+                
+                # For each matching service, get operations and expand operation patterns
+                for service in matching_services:
+                    service_attrs = service.get('KeyAttributes', {})
+                    service_name = service_attrs.get('Name', '')
+                    environment = service_attrs.get('Environment', '')
+                    
+                    try:
+                        # Get operations for this service
+                        operations_response = appsignals_client.list_service_operations(
+                            StartTime=datetime.fromtimestamp(unix_start, tz=timezone.utc),
+                            EndTime=datetime.fromtimestamp(unix_end, tz=timezone.utc),
+                            KeyAttributes=service_attrs,
+                            MaxResults=100
+                        )
+                        
+                        operations = operations_response.get('Operations', [])
+                        logger.debug(f"Found {len(operations)} operations for service '{service_name}'")
+                        
+                        # Filter operations based on operation pattern
+                        for operation in operations:
+                            operation_name = operation.get('Name', '')
+                            
+                            # Check if operation matches the pattern
+                            operation_matches = False
+                            if "*" not in operation_pattern:
+                                # Exact operation name match
+                                operation_matches = (operation_name == operation_pattern)
+                            else:
+                                # Wildcard operation name match
+                                if operation_search_term == '':
+                                    # Match all operations
+                                    operation_matches = True
+                                else:
+                                    # Check if operation contains the search term
+                                    operation_matches = operation_search_term in operation_name.lower()
+                            
+                            if operation_matches:
+                                # Check if this operation has the required metric type
+                                metric_refs = operation.get('MetricReferences', [])
+                                has_metric_type = any(
+                                    ref.get('MetricType', '') == metric_type 
+                                    for ref in metric_refs
+                                )
+                                
+                                if has_metric_type:
+                                    expanded_targets.append({
+                                        "Type": "service_operation",
+                                        "Data": {
+                                            "ServiceOperation": {
+                                                "Service": {
+                                                    "Type": "Service",
+                                                    "Name": service_name,
+                                                    "Environment": environment
+                                                },
+                                                "Operation": operation_name,
+                                                "MetricType": metric_type
+                                            }
+                                        }
+                                    })
+                                    matches_found += 1
+                                    logger.debug(f"Added operation: {service_name} -> {operation_name} ({metric_type})")
+                                else:
+                                    logger.debug(f"Skipping operation {operation_name} - no {metric_type} metric available")
+                    
+                    except Exception as e:
+                        logger.warning(f"Failed to get operations for service '{service_name}': {e}")
+                        continue
+                
+                logger.debug(f"Service operation pattern '{service_pattern}' + '{operation_pattern}' expanded to {matches_found} targets")
                 
         except Exception as e:
             logger.warning(f"Failed to expand service operation patterns: {e}")

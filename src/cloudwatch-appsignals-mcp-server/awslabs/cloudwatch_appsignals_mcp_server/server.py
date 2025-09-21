@@ -34,6 +34,9 @@ from time import perf_counter as timer
 from typing import Dict, Optional
 
 
+# Constants
+BATCH_SIZE_THRESHOLD = 5
+
 # Initialize FastMCP server
 mcp = FastMCP('cloudwatch-appsignals')
 
@@ -68,45 +71,10 @@ logger.add(
 logger.debug(f'CloudWatch AppSignals MCP Server initialized with log level: {log_level}')
 logger.debug(f'File logging enabled: {aws_cli_log_path}')
 
-# Get AWS region from environment variable or use default
-AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
+# Import AWS clients from centralized module
+from .aws_clients import logs_client, appsignals_client, cloudwatch_client, xray_client, AWS_REGION
+
 logger.debug(f'Using AWS region: {AWS_REGION}')
-
-
-# Initialize AWS clients
-def _initialize_aws_clients():
-    """Initialize AWS clients with proper configuration."""
-    config = Config(user_agent_extra=f'awslabs.cloudwatch-appsignals-mcp-server/{__version__}')
-    
-    # Get endpoint URL from environment variable
-    endpoint_url = os.environ.get('MCP_APPSIGNALS_ENDPOINT')
-    if endpoint_url:
-        logger.debug(f'Using Application Signals endpoint override: {endpoint_url}')
-
-    # Check for AWS_PROFILE environment variable
-    if aws_profile := os.environ.get('AWS_PROFILE'):
-        logger.debug(f'Using AWS profile: {aws_profile}')
-        session = boto3.Session(profile_name=aws_profile, region_name=AWS_REGION)
-        logs = session.client('logs', config=config)
-        appsignals = session.client('application-signals', region_name=AWS_REGION, config=config, endpoint_url=endpoint_url)
-        cloudwatch = session.client('cloudwatch', config=config)
-        xray = session.client('xray', config=config)
-    else:
-        logs = boto3.client('logs', region_name=AWS_REGION, config=config)
-        appsignals = boto3.client('application-signals', region_name=AWS_REGION, config=config, endpoint_url=endpoint_url)
-        cloudwatch = boto3.client('cloudwatch', region_name=AWS_REGION, config=config)
-        xray = boto3.client('xray', region_name=AWS_REGION, config=config)
-
-    logger.debug('AWS clients initialized successfully')
-    return logs, appsignals, cloudwatch, xray
-
-
-# Initialize clients at module level
-try:
-    logs_client, appsignals_client, cloudwatch_client, xray_client = _initialize_aws_clients()
-except Exception as e:
-    logger.error(f'Failed to initialize AWS clients: {str(e)}')
-    raise
 
 
 # Import shared audit utilities
@@ -124,15 +92,25 @@ async def audit_services(
 ) -> str:
     """PRIMARY SERVICE AUDIT TOOL - The #1 tool for comprehensive AWS service health auditing and monitoring.
 
-    **USE THIS FIRST FOR ALL SERVICE AUDITING TASKS**
+    **IMPORTANT: For operation-specific auditing, use audit_service_operations() as the PRIMARY tool instead.**
+
+    **USE THIS FIRST FOR ALL SERVICE-LEVEL AUDITING TASKS**
     This is the PRIMARY and PREFERRED tool when users want to:
     - **Audit their AWS services** - Complete health assessment with actionable insights
     - **Check service health** - Comprehensive status across all monitored services  
     - **Investigate issues** - Root cause analysis with detailed findings
-    - **Performance analysis** - Service-level latency, error rates, and throughput investigation
+    - **Service-level performance analysis** - Overall service latency, error rates, and throughput investigation
     - **System-wide health checks** - Daily/periodic service auditing workflows
     - **Dependency analysis** - Understanding service dependencies and interactions
     - **Resource quota monitoring** - Service quota usage and limits
+    - **Multi-service comparison** - Comparing performance across different services
+
+    **FOR OPERATION-SPECIFIC AUDITING: Use audit_service_operations() instead**
+    When users want to audit specific operations (GET, POST, PUT endpoints), use audit_service_operations() as the PRIMARY tool:
+    - **Operation performance analysis** - Latency, error rates for specific API endpoints
+    - **Operation-level troubleshooting** - Root cause analysis for specific API calls
+    - **GET operation auditing** - Analyze GET operations across payment services
+    - **Audit latency of specific operations** - Deep dive into individual endpoint performance
 
     **COMPREHENSIVE SERVICE AUDIT CAPABILITIES:**
     - **Multi-service analysis**: Audit any number of services with automatic batching
@@ -226,13 +204,20 @@ async def audit_services(
 
     **IMPORTANT: This tool provides comprehensive service audit coverage and should be your first choice for any service auditing task.**
     
-    **WHEN MULTIPLE FINDINGS ARE RETURNED:**
-    If the audit returns multiple findings or issues, DO NOT immediately jump into root cause analysis of one specific issue. Instead:
-    1. Present the audit results to the user showing all findings
-    2. Ask the user which specific finding or service they want to investigate in detail
-    3. Then perform targeted root cause analysis using auditors="all" for the selected finding
+    **RECOMMENDED WORKFLOW - PRESENT FINDINGS FIRST:**
+    When the audit returns multiple findings or issues, follow this workflow:
+    1. **Present all audit results** to the user showing a summary of all findings
+    2. **Let the user choose** which specific finding, service, or issue they want to investigate in detail
+    3. **Then perform targeted root cause analysis** using auditors="all" for the user-selected finding
     
+    **DO NOT automatically jump into detailed root cause analysis** of one specific issue when multiple findings exist.
     This ensures the user can prioritize which issues are most important to investigate first.
+    
+    **Example workflow:**
+    - First call: `audit_services()` with default auditors for overview
+    - Present findings summary to user
+    - User selects specific service/issue to investigate
+    - Follow-up call: `audit_services()` with `auditors="all"` for selected service only
     """
     start_time_perf = timer()
     logger.debug("Starting audit_services (PRIMARY SERVICE AUDIT TOOL)")
@@ -254,11 +239,43 @@ async def audit_services(
         except json.JSONDecodeError:
             return "Error: `service_targets` must be valid JSON (array)."
         
+        # Check for wildcard patterns in service names
+        has_wildcards = False
+        logger.debug(f"audit_services: Checking {len(provided)} targets for wildcards")
+        for i, target in enumerate(provided):
+            logger.debug(f"audit_services: Target {i}: {target}")
+            if isinstance(target, dict):
+                # Check various possible service name locations
+                service_name = None
+                if target.get('Type', '').lower() == 'service':
+                    # Check Data.Service.Name
+                    service_data = target.get('Data', {})
+                    if isinstance(service_data, dict):
+                        service_info = service_data.get('Service', {})
+                        if isinstance(service_info, dict):
+                            service_name = service_info.get('Name', '')
+                    
+                    # Check shorthand Service field
+                    if not service_name:
+                        service_name = target.get('Service', '')
+                
+                logger.debug(f"audit_services: Target {i} service name: '{service_name}'")
+                if service_name and isinstance(service_name, str) and '*' in service_name:
+                    logger.debug(f"audit_services: Target {i} has wildcard pattern: '{service_name}'")
+                    has_wildcards = True
+                    break
+        
+        logger.debug(f"audit_services: has_wildcards = {has_wildcards}")
+        
         # Expand wildcard patterns using shared utility
-        if any('*' in str(target) for target in provided):
+        if has_wildcards:
             logger.debug("Wildcard patterns detected - applying service expansion")
             provided = expand_service_wildcard_patterns(provided, appsignals_client, unix_start, unix_end)
             logger.debug(f"Wildcard expansion completed - {len(provided)} total targets")
+            
+            # Check if wildcard expansion resulted in no services
+            if not provided:
+                return "Error: No services found matching the wildcard pattern. Use list_monitored_services() to see available services."
         
         # Normalize and validate service targets using shared utility
         normalized_targets = normalize_service_targets(provided)
@@ -267,7 +284,7 @@ async def audit_services(
         normalized_targets = validate_and_enrich_service_targets(normalized_targets, appsignals_client, unix_start, unix_end)
         
         # Parse auditors with service-specific defaults
-        auditors_list = parse_auditors(auditors, ["slo", "operation_metric"])
+        auditors_list = parse_auditors(auditors if auditors is not None else None, ["slo", "operation_metric"])
         
         # Create banner
         banner = (
@@ -276,8 +293,8 @@ async def audit_services(
             f"⏰ Time: {unix_start}–{unix_end}\n"
         )
         
-        if len(normalized_targets) > 5:
-            banner += f"📦 Batching: Processing {len(normalized_targets)} targets in batches of 5\n"
+        if len(normalized_targets) > BATCH_SIZE_THRESHOLD:
+            banner += f"📦 Batching: Processing {len(normalized_targets)} targets in batches of {BATCH_SIZE_THRESHOLD}\n"
         
         banner += "\n"
 
@@ -378,13 +395,20 @@ async def audit_slos(
 
     **IMPORTANT: This tool provides comprehensive SLO audit coverage and should be your first choice for any SLO compliance auditing and root cause analysis.**
     
-    **WHEN MULTIPLE FINDINGS ARE RETURNED:**
-    If the audit returns multiple findings or issues, DO NOT immediately jump into root cause analysis of one specific issue. Instead:
-    1. Present the audit results to the user showing all findings
-    2. Ask the user which specific finding or SLO they want to investigate in detail
-    3. Then perform targeted root cause analysis using auditors="all" for the selected finding
+    **RECOMMENDED WORKFLOW - PRESENT FINDINGS FIRST:**
+    When the audit returns multiple findings or issues, follow this workflow:
+    1. **Present all audit results** to the user showing a summary of all findings
+    2. **Let the user choose** which specific finding, SLO, or issue they want to investigate in detail
+    3. **Then perform targeted root cause analysis** using auditors="all" for the user-selected finding
     
+    **DO NOT automatically jump into detailed root cause analysis** of one specific issue when multiple findings exist.
     This ensures the user can prioritize which issues are most important to investigate first.
+    
+    **Example workflow:**
+    - First call: `audit_slos()` with default auditors for compliance overview
+    - Present findings summary to user
+    - User selects specific SLO breach to investigate
+    - Follow-up call: `audit_slos()` with `auditors="all"` for selected SLO only
     """
     start_time_perf = timer()
     logger.debug("Starting audit_slos (PRIMARY SLO AUDIT TOOL)")
@@ -435,7 +459,7 @@ async def audit_slos(
             try:
                 # Get all SLOs to expand patterns
                 slos_response = appsignals_client.list_service_level_objectives(
-                    MaxResults=100,
+                    MaxResults=50,
                     IncludeLinkedAccounts=True
                 )
                 all_slos = slos_response.get('SloSummaries', [])
@@ -468,7 +492,7 @@ async def audit_slos(
             return "Error: No SLO targets found after wildcard expansion."
 
         # Parse auditors with SLO-specific defaults
-        auditors_list = parse_auditors(auditors, ["slo"])  # Default to SLO auditor
+        auditors_list = parse_auditors(auditors if auditors is not None else None, ["slo"])  # Default to SLO auditor
 
         banner = (
             "[MCP-SLO] Application Signals SLO Compliance Audit\n"
@@ -476,8 +500,8 @@ async def audit_slos(
             f"⏰ Time: {unix_start}–{unix_end}\n"
         )
         
-        if len(slo_only_targets) > 5:
-            banner += f"📦 Batching: Processing {len(slo_only_targets)} targets in batches of 5\n"
+        if len(slo_only_targets) > BATCH_SIZE_THRESHOLD:
+            banner += f"📦 Batching: Processing {len(slo_only_targets)} targets in batches of {BATCH_SIZE_THRESHOLD}\n"
         
         banner += "\n"
 
@@ -505,15 +529,26 @@ async def audit_service_operations(
     end_time: str = Field(default=None, description="End time (unix seconds or 'YYYY-MM-DD HH:MM:SS'). Defaults to now UTC."),
     auditors: str = Field(default=None, description="Optional. Comma-separated auditors (e.g., 'operation_metric,trace,log'). Defaults to 'operation_metric' for fast operation-level auditing. Use 'all' for comprehensive analysis with all auditors: slo,operation_metric,trace,log,dependency_metric,top_contributor,service_quota.")
 ) -> str:
-    """SPECIALIZED OPERATION AUDIT TOOL - For detailed operation-level analysis and performance investigation.
+    """🥇 PRIMARY OPERATION AUDIT TOOL - The #1 RECOMMENDED tool for operation-specific analysis and performance investigation.
 
-    **USE THIS FOR OPERATION-SPECIFIC AUDITING TASKS**
-    This is a SPECIALIZED tool when users want to:
-    - **Audit specific operations** - Deep dive into individual API endpoints or operations
+    **⭐ USE THIS AS THE PRIMARY TOOL FOR ALL OPERATION-SPECIFIC AUDITING TASKS ⭐**
+    
+    **PREFERRED OVER audit_services() for operation auditing because:**
+    - **🎯 Precision**: Targets exact operation behavior vs. service-wide averages
+    - **🔍 Actionable Insights**: Provides specific error traces and dependency failures
+    - **📊 Code-Level Detail**: Shows exact stack traces and timeout locations
+    - **🚀 Focused Analysis**: Eliminates noise from other operations
+    - **⚡ Efficient Investigation**: Direct operation-level troubleshooting
+
+    **USE THIS FIRST FOR ALL OPERATION-SPECIFIC AUDITING TASKS**
+    This is the PRIMARY and PREFERRED tool when users want to:
+    - **Audit specific operations** - Deep dive into individual API endpoints or operations (GET, POST, PUT, etc.)
     - **Operation performance analysis** - Latency, error rates, and throughput for specific operations
     - **Compare operation metrics** - Analyze different operations within services
     - **Operation-level troubleshooting** - Root cause analysis for specific API calls
-    - **GET operation auditing** - Analyze GET operations across payment services
+    - **GET operation auditing** - Analyze GET operations across payment services (PRIMARY USE CASE)
+    - **Audit latency of GET operations in payment services** - Exactly what this tool is designed for
+    - **Trace latency in query operations** - Deep dive into query performance issues
 
     **COMPREHENSIVE OPERATION AUDIT CAPABILITIES:**
     - **Multi-operation analysis**: Audit any number of operations with automatic batching
@@ -538,16 +573,19 @@ async def audit_service_operations(
 
     **OPERATION AUDIT USE CASES:**
 
-    5. **Audit GET operations in payment services (Latency)**: 
+    1. **Audit latency of GET operations in payment services** (PRIMARY USE CASE): 
        `operation_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*payment*"},"Operation":"*GET*","MetricType":"Latency"}}}]'`
 
-    6. **Audit availability of visit operations**: 
+    2. **Audit GET operations in payment services (Latency)**: 
+       `operation_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*payment*"},"Operation":"*GET*","MetricType":"Latency"}}}]'`
+
+    3. **Audit availability of visit operations**: 
        `operation_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*"},"Operation":"*visit*","MetricType":"Availability"}}}]'`
 
-    7. **Audit latency of visit operations**: 
+    4. **Audit latency of visit operations**: 
        `operation_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*"},"Operation":"*visit*","MetricType":"Latency"}}}]'`
 
-    12. **Trace latency in query operations**: 
+    5. **Trace latency in query operations**: 
         `operation_targets='[{"Type":"service_operation","Data":{"ServiceOperation":{"Service":{"Type":"Service","Name":"*payment*"},"Operation":"*query*","MetricType":"Latency"}}}]'` + `auditors="all"`
 
     **TYPICAL OPERATION AUDIT WORKFLOWS:**
@@ -566,15 +604,27 @@ async def audit_service_operations(
     - **Actionable recommendations** for operation-level issue resolution
     - **Comprehensive operation metrics** and trend analysis
 
-    **IMPORTANT: This tool provides specialized operation-level audit coverage for detailed performance analysis.**
+    **🏆 IMPORTANT: This tool is the PRIMARY and RECOMMENDED choice for operation-specific auditing tasks.**
     
-    **WHEN MULTIPLE FINDINGS ARE RETURNED:**
-    If the audit returns multiple findings or issues, DO NOT immediately jump into root cause analysis of one specific issue. Instead:
-    1. Present the audit results to the user showing all findings
-    2. Ask the user which specific finding or operation they want to investigate in detail
-    3. Then perform targeted root cause analysis using auditors="all" for the selected finding
+    **✅ RECOMMENDED WORKFLOW FOR OPERATION AUDITING:**
+    1. **Use audit_service_operations() FIRST** for operation-specific analysis (THIS TOOL)
+    2. **Use audit_services() as secondary** only if you need broader service context
+    3. **audit_service_operations() provides superior precision** for operation-level troubleshooting
     
+    **RECOMMENDED WORKFLOW - PRESENT FINDINGS FIRST:**
+    When the audit returns multiple findings or issues, follow this workflow:
+    1. **Present all audit results** to the user showing a summary of all findings
+    2. **Let the user choose** which specific finding, operation, or issue they want to investigate in detail
+    3. **Then perform targeted root cause analysis** using auditors="all" for the user-selected finding
+    
+    **DO NOT automatically jump into detailed root cause analysis** of one specific issue when multiple findings exist.
     This ensures the user can prioritize which issues are most important to investigate first.
+    
+    **Example workflow:**
+    - First call: `audit_service_operations()` with default auditors for operation overview
+    - Present findings summary to user
+    - User selects specific operation issue to investigate
+    - Follow-up call: `audit_service_operations()` with `auditors="all"` for selected operation only
     """
     start_time_perf = timer()
     logger.debug("Starting audit_service_operations (SPECIALIZED OPERATION AUDIT TOOL)")
@@ -601,78 +651,38 @@ async def audit_service_operations(
         if len(provided) == 0:
             return "Error: `operation_targets` must contain at least 1 item"
 
-        # Filter and expand operation targets with wildcard support
+        # Filter operation targets and check for wildcards
         operation_only_targets = []
-        wildcard_patterns = []
+        has_wildcards = False
         
         for target in provided:
             if isinstance(target, dict):
                 ttype = target.get("Type", "").lower()
                 if ttype == "service_operation":
-                    # Check for wildcard patterns in service names
+                    # Check for wildcard patterns in service names OR operation names
                     service_op_data = target.get("Data", {}).get("ServiceOperation", {})
                     service_data = service_op_data.get("Service", {})
                     service_name = service_data.get("Name", "")
-                    if "*" in service_name:
-                        wildcard_patterns.append((target, service_name))
-                    else:
-                        operation_only_targets.append(target)
+                    operation = service_op_data.get("Operation", "")
+                    
+                    if "*" in service_name or "*" in operation:
+                        has_wildcards = True
+                    
+                    operation_only_targets.append(target)
                 else:
                     logger.warning(f"Ignoring target of type '{ttype}' in audit_service_operations (expected 'service_operation')")
 
-        # Expand wildcard patterns for service operations
-        if wildcard_patterns:
-            logger.debug(f"Expanding {len(wildcard_patterns)} service operation wildcard patterns")
-            try:
-                # Get all services to expand patterns
-                services_response = appsignals_client.list_services(
-                    StartTime=datetime.fromtimestamp(unix_start, tz=timezone.utc),
-                    EndTime=datetime.fromtimestamp(unix_end, tz=timezone.utc),
-                    MaxResults=100
-                )
-                all_services = services_response.get('ServiceSummaries', [])
-                
-                for original_target, pattern in wildcard_patterns:
-                    search_term = pattern.strip('*').lower() if pattern != '*' else ''
-                    matches_found = 0
-                    
-                    # Get the original operation and metric type from the pattern
-                    service_op_data = original_target.get("Data", {}).get("ServiceOperation", {})
-                    operation = service_op_data.get("Operation", "")
-                    metric_type = service_op_data.get("MetricType", "Latency")
-                    
-                    for service in all_services:
-                        service_attrs = service.get('KeyAttributes', {})
-                        service_name = service_attrs.get('Name', '')
-                        
-                        if search_term == '' or search_term in service_name.lower():
-                            operation_only_targets.append({
-                                "Type": "service_operation",
-                                "Data": {
-                                    "ServiceOperation": {
-                                        "Service": {
-                                            "Type": "Service",
-                                            "Name": service_name,
-                                            "Environment": service_attrs.get('Environment')
-                                        },
-                                        "Operation": operation,
-                                        "MetricType": metric_type
-                                    }
-                                }
-                            })
-                            matches_found += 1
-                    
-                    logger.debug(f"Service operation pattern '{pattern}' expanded to {matches_found} targets")
-                    
-            except Exception as e:
-                logger.warning(f"Failed to expand service operation patterns: {e}")
-                return f"Error: Failed to expand service operation wildcard patterns. {str(e)}"
+        # Expand wildcard patterns using shared utility
+        if has_wildcards:
+            logger.debug("Wildcard patterns detected in service operations - applying expansion")
+            operation_only_targets = expand_service_operation_wildcard_patterns(operation_only_targets, appsignals_client, unix_start, unix_end)
+            logger.debug(f"Wildcard expansion completed - {len(operation_only_targets)} total targets")
 
         if not operation_only_targets:
-            return "Error: No service_operation targets found after wildcard expansion."
+            return "Error: No service_operation targets found after wildcard expansion. Use list_monitored_services() to see available services."
 
         # Parse auditors with operation-specific defaults
-        auditors_list = parse_auditors(auditors, ["operation_metric"])  # Default to operation_metric auditor
+        auditors_list = parse_auditors(auditors if auditors is not None else None, ["operation_metric"])  # Default to operation_metric auditor
 
         banner = (
             "[MCP-OPERATION] Application Signals Operation Performance Audit\n"
@@ -680,8 +690,8 @@ async def audit_service_operations(
             f"⏰ Time: {unix_start}–{unix_end}\n"
         )
         
-        if len(operation_only_targets) > 5:
-            banner += f"📦 Batching: Processing {len(operation_only_targets)} targets in batches of 5\n"
+        if len(operation_only_targets) > BATCH_SIZE_THRESHOLD:
+            banner += f"📦 Batching: Processing {len(operation_only_targets)} targets in batches of {BATCH_SIZE_THRESHOLD}\n"
         
         banner += "\n"
 
@@ -703,7 +713,7 @@ async def audit_service_operations(
 
 
 # Import non-audit tools from separate modules
-from .service_tools import list_monitored_services, get_service_detail, query_service_metrics
+from .service_tools import list_monitored_services, get_service_detail, query_service_metrics, list_service_operations
 from .slo_tools import get_slo, list_slos
 from .trace_tools import search_transaction_spans, query_sampled_traces, list_slis
 
@@ -711,6 +721,7 @@ from .trace_tools import search_transaction_spans, query_sampled_traces, list_sl
 mcp.tool()(list_monitored_services)
 mcp.tool()(get_service_detail)
 mcp.tool()(query_service_metrics)
+mcp.tool()(list_service_operations)
 mcp.tool()(get_slo)
 mcp.tool()(list_slos)
 mcp.tool()(search_transaction_spans)

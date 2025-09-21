@@ -31,24 +31,35 @@ def _initialize_aws_clients():
     """Initialize AWS clients with proper configuration."""
     config = Config(user_agent_extra=f'awslabs.cloudwatch-appsignals-mcp-server/{__version__}')
     
-    # Get endpoint URL from environment variable
-    endpoint_url = os.environ.get('MCP_APPSIGNALS_ENDPOINT')
-    if endpoint_url:
-        logger.debug(f'Using Application Signals endpoint override: {endpoint_url}')
+    # Get endpoint URLs from environment variables
+    appsignals_endpoint = os.environ.get('MCP_APPSIGNALS_ENDPOINT')
+    logs_endpoint = os.environ.get('MCP_LOGS_ENDPOINT')
+    cloudwatch_endpoint = os.environ.get('MCP_CLOUDWATCH_ENDPOINT')
+    xray_endpoint = os.environ.get('MCP_XRAY_ENDPOINT')
+    
+    # Log endpoint overrides
+    if appsignals_endpoint:
+        logger.debug(f'Using Application Signals endpoint override: {appsignals_endpoint}')
+    if logs_endpoint:
+        logger.debug(f'Using CloudWatch Logs endpoint override: {logs_endpoint}')
+    if cloudwatch_endpoint:
+        logger.debug(f'Using CloudWatch endpoint override: {cloudwatch_endpoint}')
+    if xray_endpoint:
+        logger.debug(f'Using X-Ray endpoint override: {xray_endpoint}')
 
     # Check for AWS_PROFILE environment variable
     if aws_profile := os.environ.get('AWS_PROFILE'):
         logger.debug(f'Using AWS profile: {aws_profile}')
         session = boto3.Session(profile_name=aws_profile, region_name=AWS_REGION)
-        logs = session.client('logs', config=config)
-        appsignals = session.client('application-signals', region_name=AWS_REGION, config=config, endpoint_url=endpoint_url)
-        cloudwatch = session.client('cloudwatch', config=config)
-        xray = session.client('xray', config=config)
+        logs = session.client('logs', config=config, endpoint_url=logs_endpoint)
+        appsignals = session.client('application-signals', region_name=AWS_REGION, config=config, endpoint_url=appsignals_endpoint)
+        cloudwatch = session.client('cloudwatch', config=config, endpoint_url=cloudwatch_endpoint)
+        xray = session.client('xray', config=config, endpoint_url=xray_endpoint)
     else:
-        logs = boto3.client('logs', region_name=AWS_REGION, config=config)
-        appsignals = boto3.client('application-signals', region_name=AWS_REGION, config=config, endpoint_url=endpoint_url)
-        cloudwatch = boto3.client('cloudwatch', region_name=AWS_REGION, config=config)
-        xray = boto3.client('xray', region_name=AWS_REGION, config=config)
+        logs = boto3.client('logs', region_name=AWS_REGION, config=config, endpoint_url=logs_endpoint)
+        appsignals = boto3.client('application-signals', region_name=AWS_REGION, config=config, endpoint_url=appsignals_endpoint)
+        cloudwatch = boto3.client('cloudwatch', region_name=AWS_REGION, config=config, endpoint_url=cloudwatch_endpoint)
+        xray = boto3.client('xray', region_name=AWS_REGION, config=config, endpoint_url=xray_endpoint)
 
     logger.debug('AWS clients initialized successfully')
     return logs, appsignals, cloudwatch, xray
