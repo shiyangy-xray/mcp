@@ -530,7 +530,7 @@ async def list_service_operations(
             MaxResults=100
         )
 
-        operations = operations_response.get('Operations', [])
+        operations = operations_response.get('ServiceOperations', [])
         logger.debug(f'Retrieved {len(operations)} operations for service: {service_name}')
 
         if not operations:
