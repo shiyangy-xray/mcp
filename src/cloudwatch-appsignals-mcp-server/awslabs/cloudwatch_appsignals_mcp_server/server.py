@@ -78,7 +78,7 @@ logger.debug(f'Using AWS region: {AWS_REGION}')
 
 
 # Import shared audit utilities
-from .audit_utils import execute_audit_cli, parse_auditors, expand_service_wildcard_patterns, expand_slo_wildcard_patterns, expand_service_operation_wildcard_patterns
+from .audit_utils import execute_audit_api, parse_auditors, expand_service_wildcard_patterns, expand_slo_wildcard_patterns, expand_service_operation_wildcard_patterns
 from .service_audit_utils import normalize_service_targets, validate_and_enrich_service_targets
 from .audit_presentation_utils import extract_findings_summary, format_findings_summary
 
@@ -270,7 +270,7 @@ async def audit_services(
         # Expand wildcard patterns using shared utility
         if has_wildcards:
             logger.debug("Wildcard patterns detected - applying service expansion")
-            provided = expand_service_wildcard_patterns(provided, appsignals_client, unix_start, unix_end)
+            provided = expand_service_wildcard_patterns(provided, unix_start, unix_end, appsignals_client)
             logger.debug(f"Wildcard expansion completed - {len(provided)} total targets")
             
             # Check if wildcard expansion resulted in no services
@@ -284,7 +284,7 @@ async def audit_services(
         normalized_targets = validate_and_enrich_service_targets(normalized_targets, appsignals_client, unix_start, unix_end)
         
         # Parse auditors with service-specific defaults
-        auditors_list = parse_auditors(auditors if auditors is not None else None, ["slo", "operation_metric"])
+        auditors_list = parse_auditors(auditors, ["slo", "operation_metric"])
         
         # Create banner
         banner = (
@@ -303,8 +303,8 @@ async def audit_services(
         if auditors_list:
             input_obj["Auditors"] = auditors_list
 
-        # Execute audit CLI using shared utility
-        result = await execute_audit_cli(input_obj, region, banner)
+        # Execute audit API using shared utility
+        result = await execute_audit_api(input_obj, region, banner)
 
         elapsed = timer() - start_time_perf
         logger.debug(f"audit_services completed in {elapsed:.3f}s (region={region})")
@@ -453,36 +453,14 @@ async def audit_slos(
                 else:
                     logger.warning(f"Ignoring target of type '{ttype}' in audit_slos (expected 'slo')")
 
-        # Expand wildcard patterns for SLOs
+        # Expand wildcard patterns for SLOs using shared utility
         if wildcard_patterns:
             logger.debug(f"Expanding {len(wildcard_patterns)} SLO wildcard patterns")
             try:
-                # Get all SLOs to expand patterns
-                slos_response = appsignals_client.list_service_level_objectives(
-                    MaxResults=50,
-                    IncludeLinkedAccounts=True
-                )
-                all_slos = slos_response.get('SloSummaries', [])
-                
-                for original_target, pattern in wildcard_patterns:
-                    search_term = pattern.strip('*').lower() if pattern != '*' else ''
-                    matches_found = 0
-                    
-                    for slo in all_slos:
-                        slo_name = slo.get('Name', '')
-                        if search_term == '' or search_term in slo_name.lower():
-                            slo_only_targets.append({
-                                "Type": "slo",
-                                "Data": {
-                                    "Slo": {
-                                        "SloName": slo_name,
-                                        "SloArn": slo.get('Arn', '')
-                                    }
-                                }
-                            })
-                            matches_found += 1
-                    
-                    logger.debug(f"SLO pattern '{pattern}' expanded to {matches_found} targets")
+                # Use the shared utility function
+                expanded_slo_targets = expand_slo_wildcard_patterns(provided, appsignals_client)
+                # Filter to get only SLO targets
+                slo_only_targets = [target for target in expanded_slo_targets if target.get("Type", "").lower() == "slo"]
                     
             except Exception as e:
                 logger.warning(f"Failed to expand SLO patterns: {e}")
@@ -492,7 +470,7 @@ async def audit_slos(
             return "Error: No SLO targets found after wildcard expansion."
 
         # Parse auditors with SLO-specific defaults
-        auditors_list = parse_auditors(auditors if auditors is not None else None, ["slo"])  # Default to SLO auditor
+        auditors_list = parse_auditors(auditors, ["slo"])  # Default to SLO auditor
 
         banner = (
             "[MCP-SLO] Application Signals SLO Compliance Audit\n"
@@ -510,8 +488,8 @@ async def audit_slos(
         if auditors_list:
             input_obj["Auditors"] = auditors_list
 
-        # Execute audit CLI using shared utility
-        result = await execute_audit_cli(input_obj, region, banner)
+        # Execute audit API using shared utility
+        result = await execute_audit_api(input_obj, region, banner)
 
         elapsed = timer() - start_time_perf
         logger.debug(f"audit_slos completed in {elapsed:.3f}s (region={region})")
@@ -675,14 +653,14 @@ async def audit_service_operations(
         # Expand wildcard patterns using shared utility
         if has_wildcards:
             logger.debug("Wildcard patterns detected in service operations - applying expansion")
-            operation_only_targets = expand_service_operation_wildcard_patterns(operation_only_targets, appsignals_client, unix_start, unix_end)
+            operation_only_targets = expand_service_operation_wildcard_patterns(operation_only_targets, unix_start, unix_end, appsignals_client)
             logger.debug(f"Wildcard expansion completed - {len(operation_only_targets)} total targets")
 
         if not operation_only_targets:
             return "Error: No service_operation targets found after wildcard expansion. Use list_monitored_services() to see available services."
 
         # Parse auditors with operation-specific defaults
-        auditors_list = parse_auditors(auditors if auditors is not None else None, ["operation_metric"])  # Default to operation_metric auditor
+        auditors_list = parse_auditors(auditors, ["operation_metric"])  # Default to operation_metric auditor
 
         banner = (
             "[MCP-OPERATION] Application Signals Operation Performance Audit\n"
@@ -700,8 +678,8 @@ async def audit_service_operations(
         if auditors_list:
             input_obj["Auditors"] = auditors_list
 
-        # Execute audit CLI using shared utility
-        result = await execute_audit_cli(input_obj, region, banner)
+        # Execute audit API using shared utility
+        result = await execute_audit_api(input_obj, region, banner)
 
         elapsed = timer() - start_time_perf
         logger.debug(f"audit_service_operations completed in {elapsed:.3f}s (region={region})")

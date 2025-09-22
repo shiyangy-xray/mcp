@@ -24,35 +24,23 @@ from loguru import logger
 from typing import List
 
 
-async def execute_audit_cli(input_obj: dict, region: str, banner: str) -> str:
-    """Execute the AWS CLI audit command with the given input object."""
-    aws_bin = os.environ.get("MCP_AWS_CLI", "aws")
-    if shutil.which(aws_bin) is None:
-        pretty_input = json.dumps(input_obj, indent=2)
-        logger.error(
-            banner +
-            "Result: FAILED to execute AWS CLI (binary not found).\n"
-            "Action: Install or set MCP_AWS_CLI to the full path of your aws binary.\n"
-            "---- CLI PARAMETERS (JSON) ----\n" + pretty_input + "\n---- END ----\n"
-        )
-        return (
-            banner +
-            "Result: FAILED to execute AWS CLI (binary not found). "
-            "Install or set MCP_AWS_CLI to the full path of your aws binary."
-        )
-
+async def execute_audit_api(input_obj: dict, region: str, banner: str) -> str:
+    """Execute the Application Signals audit API call with the given input object."""
+    from .aws_clients import appsignals_client
+    from datetime import datetime, timezone
+    
     # File log path
     desired_log_path = os.environ.get("AUDITOR_LOG_PATH", "/tmp")
     try:
         if desired_log_path.endswith(os.sep) or os.path.isdir(desired_log_path):
             os.makedirs(desired_log_path, exist_ok=True)
-            log_path = os.path.join(desired_log_path, "aws_cli.log")
+            log_path = os.path.join(desired_log_path, "aws_api.log")
         else:
             os.makedirs(os.path.dirname(desired_log_path) or ".", exist_ok=True)
             log_path = desired_log_path
     except Exception:
         os.makedirs("/tmp", exist_ok=True)
-        log_path = "/tmp/aws_cli.log"
+        log_path = "/tmp/aws_api.log"
 
     # Process targets in batches if needed
     targets = input_obj.get("AuditTargets", [])
@@ -72,89 +60,93 @@ async def execute_audit_cli(input_obj: dict, region: str, banner: str) -> str:
     for batch_idx, batch_targets in enumerate(target_batches, 1):
         logger.info(f"Processing batch {batch_idx}/{len(target_batches)} with {len(batch_targets)} targets")
         
-        # Build CLI input for this batch
+        # Build API input for this batch
         batch_input_obj = {
-            "StartTime": input_obj["StartTime"],
-            "EndTime": input_obj["EndTime"],
+            "StartTime": datetime.fromtimestamp(input_obj["StartTime"], tz=timezone.utc),
+            "EndTime": datetime.fromtimestamp(input_obj["EndTime"], tz=timezone.utc),
             "AuditTargets": batch_targets
         }
         if "Auditors" in input_obj:
             batch_input_obj["Auditors"] = input_obj["Auditors"]
 
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as tf:
-            json.dump(batch_input_obj, tf)
-            tf.flush()
-            cli_input_arg = f"file://{tf.name}"
-
-        cmd = [
-            aws_bin, "application-signals-demo", "list-audit-findings",
-            "--cli-input-json", cli_input_arg, "--region", region
-        ]
+        # Log API invocation details
+        api_pretty_input = json.dumps({
+            "StartTime": input_obj["StartTime"],
+            "EndTime": input_obj["EndTime"],
+            "AuditTargets": batch_targets,
+            "Auditors": input_obj.get("Auditors", [])
+        }, indent=2)
         
-        # Add endpoint-url only if it's set
-        endpoint_url = os.environ.get('MCP_APPSIGNALS_ENDPOINT')
-        if endpoint_url:
-            cmd.extend(["--endpoint-url", endpoint_url])
-
-        # Log CLI invocation details
-        cli_pretty_cmd = " ".join(cmd)
-        cli_pretty_input = json.dumps(batch_input_obj, indent=2)
+        # Also log the actual batch_input_obj that will be sent to AWS API
+        batch_input_for_logging = {
+            "StartTime": batch_input_obj["StartTime"].isoformat(),
+            "EndTime": batch_input_obj["EndTime"].isoformat(),
+            "AuditTargets": batch_input_obj["AuditTargets"]
+        }
+        if "Auditors" in batch_input_obj:
+            batch_input_for_logging["Auditors"] = batch_input_obj["Auditors"]
+        
+        batch_payload_json = json.dumps(batch_input_for_logging, indent=2)
         
         logger.info("═" * 80)
         logger.info(f"BATCH {batch_idx}/{len(target_batches)} - {datetime.now(timezone.utc).isoformat()}")
         logger.info(banner.strip())
-        logger.info("---- CLI INVOCATION ----")
-        logger.info(cli_pretty_cmd)
-        logger.info("---- CLI PARAMETERS (JSON) ----")
-        logger.info(cli_pretty_input)
+        logger.info("---- API INVOCATION ----")
+        logger.info("appsignals_client.list_audit_findings()")
+        logger.info("---- API PARAMETERS (JSON) ----")
+        logger.info(api_pretty_input)
+        logger.info("---- ACTUAL AWS API PAYLOAD ----")
+        logger.info(batch_payload_json)
         logger.info("---- END PARAMETERS ----")
 
-        # Run the CLI for this batch
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout_b, stderr_b = await proc.communicate()
-        stdout, stderr = stdout_b.decode("utf-8", errors="replace"), stderr_b.decode("utf-8", errors="replace")
+        # Write detailed payload to log file
+        with open(log_path, "a") as f:
+            f.write("═" * 80 + "\n")
+            f.write(f"BATCH {batch_idx}/{len(target_batches)} - {datetime.now(timezone.utc).isoformat()}\n")
+            f.write(banner.strip() + "\n")
+            f.write("---- API INVOCATION ----\n")
+            f.write("appsignals_client.list_audit_findings()\n")
+            f.write("---- API PARAMETERS (JSON) ----\n")
+            f.write(api_pretty_input + "\n")
+            f.write("---- ACTUAL AWS API PAYLOAD ----\n")
+            f.write(batch_payload_json + "\n")
+            f.write("---- END PARAMETERS ----\n\n")
 
-        # Handle CLI execution result for this batch
-        if proc.returncode != 0:
+        # Call the Application Signals API for this batch
+        try:
+            response = appsignals_client.list_audit_findings(**batch_input_obj)
+            
+            # Format and log output for this batch
+            observation_text = json.dumps(response, indent=2, default=str)
+            all_batch_results.append(response)
+            
+            if not response.get("AuditFindings"):
+                with open(log_path, "a") as f:
+                    f.write(f"📭 Batch {batch_idx}: No findings returned.\n")
+                    f.write("---- END RESPONSE ----\n\n")
+                logger.info(f"📭 Batch {batch_idx}: No findings returned.\n---- END RESPONSE ----")
+            else:
+                with open(log_path, "a") as f:
+                    f.write(f"---- BATCH {batch_idx} API RESPONSE (JSON) ----\n")
+                    f.write(observation_text + "\n")
+                    f.write("---- END RESPONSE ----\n\n")
+                logger.info(f"---- BATCH {batch_idx} API RESPONSE (JSON) ----\n" + observation_text + "\n---- END RESPONSE ----")
+                
+        except Exception as e:
+            error_msg = str(e)
             with open(log_path, "a") as f:
-                f.write(f"---- BATCH {batch_idx} CLI RESPONSE (stderr/stdout) ----\n")
-                f.write((stderr or stdout) + "\n")
-                f.write("---- END RESPONSE ----\n\n")
-            logger.error(f"---- BATCH {batch_idx} CLI RESPONSE (stderr/stdout) ----\n" + (stderr or stdout) + "\n---- END RESPONSE ----")
+                f.write(f"---- BATCH {batch_idx} API ERROR ----\n")
+                f.write(error_msg + "\n")
+                f.write("---- END ERROR ----\n\n")
+            logger.error(f"---- BATCH {batch_idx} API ERROR ----\n" + error_msg + "\n---- END ERROR ----")
             
             batch_error_result = {
                 "batch_index": batch_idx,
-                "error": f"CLI exit code: {proc.returncode}",
-                "stderr_stdout": stderr or stdout,
+                "error": f"API call failed: {error_msg}",
                 "targets_count": len(batch_targets)
             }
             all_batch_results.append(batch_error_result)
             continue
-
-        # Format and log output for this batch
-        try:
-            batch_json = json.loads(stdout)
-            observation_text = json.dumps(batch_json, indent=2)
-            all_batch_results.append(batch_json)
-        except json.JSONDecodeError:
-            observation_text = stdout or "<empty>"
-            all_batch_results.append({"batch_index": batch_idx, "raw_output": observation_text})
-
-        if not observation_text.strip():
-            with open(log_path, "a") as f:
-                f.write(f"📭 Batch {batch_idx}: No findings returned.\n")
-                f.write("---- END RESPONSE ----\n\n")
-            logger.info(f"📭 Batch {batch_idx}: No findings returned.\n---- END RESPONSE ----")
-        else:
-            with open(log_path, "a") as f:
-                f.write(f"---- BATCH {batch_idx} CLI RESPONSE (stdout pretty) ----\n")
-                f.write(observation_text + "\n")
-                f.write("---- END RESPONSE ----\n\n")
-            logger.info(f"---- BATCH {batch_idx} CLI RESPONSE (stdout pretty) ----\n" + observation_text + "\n---- END RESPONSE ----")
 
     # Aggregate results from all batches
     if not all_batch_results:
@@ -174,8 +166,8 @@ async def execute_audit_cli(input_obj: dict, region: str, banner: str) -> str:
             batch_findings = batch_result.get("AuditFindings", [])
             aggregated_findings.extend(batch_findings)
             
-            batch_targets_count = len(batch_result.get("AuditTargets", []))
-            total_targets_processed += batch_targets_count
+            # Count targets processed (this batch)
+            total_targets_processed += len(batch_targets)
 
     # Create final aggregated response
     final_result = {
@@ -201,12 +193,17 @@ async def execute_audit_cli(input_obj: dict, region: str, banner: str) -> str:
                 })
         final_result["BatchErrors"] = error_details
 
-    final_observation_text = json.dumps(final_result, indent=2)
+    final_observation_text = json.dumps(final_result, indent=2, default=str)
     return banner + final_observation_text
 
 
-def parse_auditors(auditors_value: str, default_auditors: List[str]) -> List[str]:
+def parse_auditors(auditors_value, default_auditors: List[str]) -> List[str]:
     """Parse and validate auditors parameter."""
+    # Handle Pydantic Field objects that may be passed instead of actual values
+    if hasattr(auditors_value, 'default') and hasattr(auditors_value, 'description'):
+        # This is a Pydantic Field object, use its default value
+        auditors_value = auditors_value.default
+    
     if auditors_value is None:
         user_prompt_text = os.environ.get("MCP_USER_PROMPT", "") or ""
         wants_root_cause = "root cause" in user_prompt_text.lower()
@@ -233,10 +230,13 @@ def parse_auditors(auditors_value: str, default_auditors: List[str]) -> List[str
         return raw_a
 
 
-def expand_service_wildcard_patterns(targets: List[dict], appsignals_client, unix_start: int, unix_end: int) -> List[dict]:
+def expand_service_wildcard_patterns(targets: List[dict], unix_start: int, unix_end: int, appsignals_client=None) -> List[dict]:
     """Expand wildcard patterns for service targets only."""
     from datetime import datetime, timezone
     from .utils import calculate_name_similarity
+    
+    if appsignals_client is None:
+        from .aws_clients import appsignals_client
     
     expanded_targets = []
     service_patterns = []
@@ -391,8 +391,11 @@ def expand_service_wildcard_patterns(targets: List[dict], appsignals_client, uni
     return expanded_targets
 
 
-def expand_slo_wildcard_patterns(targets: List[dict], appsignals_client) -> List[dict]:
+def expand_slo_wildcard_patterns(targets: List[dict], appsignals_client=None) -> List[dict]:
     """Expand wildcard patterns for SLO targets only."""
+    if appsignals_client is None:
+        from .aws_clients import appsignals_client
+    
     expanded_targets = []
     wildcard_patterns = []
     
@@ -418,7 +421,7 @@ def expand_slo_wildcard_patterns(targets: List[dict], appsignals_client) -> List
         try:
             # Get all SLOs to expand patterns
             slos_response = appsignals_client.list_service_level_objectives(
-                MaxResults=100,
+                MaxResults=50,
                 IncludeLinkedAccounts=True
             )
             all_slos = slos_response.get('SloSummaries', [])
@@ -450,9 +453,12 @@ def expand_slo_wildcard_patterns(targets: List[dict], appsignals_client) -> List
     return expanded_targets
 
 
-def expand_service_operation_wildcard_patterns(targets: List[dict], appsignals_client, unix_start: int, unix_end: int) -> List[dict]:
+def expand_service_operation_wildcard_patterns(targets: List[dict], unix_start: int, unix_end: int, appsignals_client=None) -> List[dict]:
     """Expand wildcard patterns for service operation targets only."""
     from datetime import datetime, timezone
+    
+    if appsignals_client is None:
+        from .aws_clients import appsignals_client
     
     expanded_targets = []
     wildcard_patterns = []
