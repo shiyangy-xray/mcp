@@ -322,10 +322,10 @@ On Windows: `%APPDATA%/Claude/claude_desktop_config.json`
 ```json
 {
     "mcpServers": {
-        "cloudwatch-appsignals": {
+        "applicationsignals": {
             "command": "uvx",
             "args": [
-                "awslabs.cloudwatch-appsignals-mcp-server@latest"
+                "awslabs.cloudwatch-applicationsignals-mcp-server@latest"
             ],
             "env": {
                 "AWS_PROFILE": "[The AWS Profile Name to use for AWS access]",
