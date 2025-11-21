@@ -296,9 +296,7 @@ use [`uvx`](https://docs.astral.sh/uv/guides/tools/) to directly run *awslabs.cl
 
 ### Installing for Kiro
 
-#### 1. Configure MCP Settings
-
-Add the following configuration to your Kiro MCP settings file at `~/.kiro/settings/mcp.json`:
+- Add the following configuration to your Kiro MCP settings file at `~/.kiro/settings/mcp.json`:
 
 ```json
 {
@@ -315,18 +313,9 @@ Add the following configuration to your Kiro MCP settings file at `~/.kiro/setti
     }
 }
 ```
-
-#### 2. Get AWS Credentials
-
-Update your AWS credentials
-
-#### 3. Enable MCP in Kiro Panel
-
-Navigate to the Kiro panel on the left-hand side, look for the MCP section at the bottom, and enable the MCP servers (if not enabled already).
-
-#### 4. Restart Kiro
-
-Sometimes Kiro may have issues loading credentials for the MCP server. It's recommended to restart Kiro so that it can properly communicate with the MCP server.
+- Update your AWS credentials
+- Navigate to the Kiro panel on the left-hand side, look for the MCP section at the bottom, and enable the MCP servers (if not enabled already).
+- Sometimes Kiro may have issues loading credentials for the MCP server. It's recommended to restart Kiro so that it can properly communicate with the MCP server.
 
 ### Installing via Claude Desktop
 
