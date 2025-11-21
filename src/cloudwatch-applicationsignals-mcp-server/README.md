@@ -318,7 +318,7 @@ Add the following configuration to your Kiro MCP settings file at `~/.kiro/setti
 
 #### 2. Get AWS Credentials
 
-Update your AWS credentials for the ApplicationSignalsMCPAccess role
+Update your AWS credentials
 
 #### 3. Enable MCP in Kiro Panel
 
