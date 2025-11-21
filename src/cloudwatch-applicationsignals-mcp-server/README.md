@@ -269,32 +269,6 @@ FILTER attributes.aws.local.service = "payment-service" and attributes.aws.local
 When using [`uv`](https://docs.astral.sh/uv/) no specific installation is needed. We will
 use [`uvx`](https://docs.astral.sh/uv/guides/tools/) to directly run *awslabs.cloudwatch-applicationsignals-mcp-server*.
 
-### Installing for Kiro
-
-- Add the following configuration to your Kiro MCP settings file at `~/.kiro/settings/mcp.json`:
-
-```json
-{
-    "mcpServers": {
-        "cloudwatch-appsignals": {
-            "command": "uvx",
-            "args": [
-                "awslabs.cloudwatch-appsignals-mcp-server@latest"
-            ],
-            "env": {
-                "AWS_PROFILE": "[The AWS Profile Name to use for AWS access]",
-                "AWS_REGION": "[AWS Region]",
-                "FASTMCP_LOG_LEVEL": "ERROR"
-            },
-            "disabled": false,
-            "autoApprove": []
-        }
-    }
-}
-```
-
-- Restart Kiro to make sure AWS credentials are properly loaded for MCP server after updating your AWS credentials
-
 ### Installing via Claude Desktop
 
 On MacOS: `~/Library/Application\ Support/Claude/claude_desktop_config.json`
@@ -340,6 +314,32 @@ On Windows: `%APPDATA%/Claude/claude_desktop_config.json`
   }
   ```
 </details>
+
+### Installing for Kiro
+
+- Add the following configuration to your Kiro MCP settings file at `~/.kiro/settings/mcp.json`:
+
+```json
+{
+    "mcpServers": {
+        "cloudwatch-appsignals": {
+            "command": "uvx",
+            "args": [
+                "awslabs.cloudwatch-appsignals-mcp-server@latest"
+            ],
+            "env": {
+                "AWS_PROFILE": "[The AWS Profile Name to use for AWS access]",
+                "AWS_REGION": "[AWS Region]",
+                "FASTMCP_LOG_LEVEL": "ERROR"
+            },
+            "disabled": false,
+            "autoApprove": []
+        }
+    }
+}
+```
+
+- Restart Kiro to make sure AWS credentials are properly loaded for MCP server after updating your AWS credentials
 
 ### Windows Installation
 
