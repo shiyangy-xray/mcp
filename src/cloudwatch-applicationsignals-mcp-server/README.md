@@ -294,6 +294,40 @@ use [`uvx`](https://docs.astral.sh/uv/guides/tools/) to directly run *awslabs.cl
 }
 ```
 
+### Installing for Kiro
+
+#### 1. Configure MCP Settings
+
+Add the following configuration to your Kiro MCP settings file at `~/.kiro/settings/mcp.json`:
+
+```json
+{
+    "mcpServers": {
+        "cloudwatch-appsignals": {
+            "command": "uvx",
+            "args": [
+                "awslabs.cloudwatch-appsignals-mcp-server@latest"
+            ],
+            "env": {},
+            "disabled": false,
+            "autoApprove": []
+        }
+    }
+}
+```
+
+#### 2. Get AWS Credentials
+
+Update your AWS credentials for the ApplicationSignalsMCPAccess role
+
+#### 3. Enable MCP in Kiro Panel
+
+Navigate to the Kiro panel on the left-hand side, look for the MCP section at the bottom, and enable the MCP servers (if not enabled already).
+
+#### 4. Restart Kiro
+
+Sometimes Kiro may have issues loading credentials for the MCP server. It's recommended to restart Kiro so that it can properly communicate with the MCP server.
+
 ### Installing via Claude Desktop
 
 On MacOS: `~/Library/Application\ Support/Claude/claude_desktop_config.json`
