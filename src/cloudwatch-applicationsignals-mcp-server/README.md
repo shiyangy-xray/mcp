@@ -269,31 +269,6 @@ FILTER attributes.aws.local.service = "payment-service" and attributes.aws.local
 When using [`uv`](https://docs.astral.sh/uv/) no specific installation is needed. We will
 use [`uvx`](https://docs.astral.sh/uv/guides/tools/) to directly run *awslabs.cloudwatch-applicationsignals-mcp-server*.
 
-### Installing for Amazon Q (Preview)
-
-- Start Amazon Q Developer CLI from [here](https://github.com/aws/amazon-q-developer-cli).
-- Add the following configuration in `~/.aws/amazonq/mcp.json` file.
-```json
-{
-  "mcpServers": {
-    "applicationsignals": {
-      "autoApprove": [],
-      "disabled": false,
-      "command": "uvx",
-      "args": [
-        "awslabs.cloudwatch-applicationsignals-mcp-server@latest"
-      ],
-      "env": {
-        "AWS_PROFILE": "[The AWS Profile Name to use for AWS access]",
-        "AWS_REGION": "[AWS Region]",
-        "FASTMCP_LOG_LEVEL": "ERROR"
-      },
-      "transportType": "stdio"
-    }
-  }
-}
-```
-
 ### Installing for Kiro
 
 - Add the following configuration to your Kiro MCP settings file at `~/.kiro/settings/mcp.json`:
@@ -306,16 +281,19 @@ use [`uvx`](https://docs.astral.sh/uv/guides/tools/) to directly run *awslabs.cl
             "args": [
                 "awslabs.cloudwatch-appsignals-mcp-server@latest"
             ],
-            "env": {},
+            "env": {
+                "AWS_PROFILE": "[The AWS Profile Name to use for AWS access]",
+                "AWS_REGION": "[AWS Region]",
+                "FASTMCP_LOG_LEVEL": "ERROR"
+            },
             "disabled": false,
             "autoApprove": []
         }
     }
 }
 ```
-- Update your AWS credentials
-- Navigate to the Kiro panel on the left-hand side, look for the MCP section at the bottom, and enable the MCP servers (if not enabled already).
-- Sometimes Kiro may have issues loading credentials for the MCP server. It's recommended to restart Kiro so that it can properly communicate with the MCP server.
+
+- Restart Kiro to make sure AWS credentials are properly loaded for MCP server after updating your AWS credentials
 
 ### Installing via Claude Desktop
 
@@ -334,7 +312,8 @@ On Windows: `%APPDATA%/Claude/claude_desktop_config.json`
         "args": ["--from", "/absolute/path/to/cloudwatch-applicationsignals-mcp-server", "awslabs.cloudwatch-applicationsignals-mcp-server"],
         "env": {
           "AWS_PROFILE": "[The AWS Profile Name to use for AWS access]",
-          "AWS_REGION": "[AWS Region]"
+          "AWS_REGION": "[AWS Region]",
+          "FASTMCP_LOG_LEVEL": "ERROR"
         }
       }
     }
@@ -353,7 +332,8 @@ On Windows: `%APPDATA%/Claude/claude_desktop_config.json`
         "args": ["awslabs.cloudwatch-applicationsignals-mcp-server@latest"],
         "env": {
           "AWS_PROFILE": "[The AWS Profile Name to use for AWS access]",
-          "AWS_REGION": "[AWS Region]"
+          "AWS_REGION": "[AWS Region]",
+          "FASTMCP_LOG_LEVEL": "ERROR"
         }
       }
     }
@@ -381,9 +361,9 @@ For Windows users, the MCP server configuration format is slightly different:
         "awslabs.cloudwatch-applicationsignals-mcp-server.exe"
       ],
       "env": {
-        "FASTMCP_LOG_LEVEL": "ERROR",
-        "AWS_PROFILE": "your-aws-profile",
-        "AWS_REGION": "us-east-1"
+        "AWS_PROFILE": "[The AWS Profile Name to use for AWS access]",
+        "AWS_REGION": "[AWS Region]",
+        "FASTMCP_LOG_LEVEL": "ERROR"
       }
     }
   }
